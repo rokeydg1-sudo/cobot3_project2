@@ -1,0 +1,20 @@
+[package]
+title = "ExtNodeMapBuild"
+version = "0.1.0"
+description = "Extracts NodeMap data from the current Isaac Sim stage for FMS integration."
+category = "Simulation"
+authors = ["cobot3_project"]
+keywords = ["isaac sim", "nodemap", "ros2", "fms"]
+readme = "docs/README.md"
+repository = ""
+
+[dependencies]
+"isaacsim.ros2.bridge" = {}
+"omni.usd" = {}
+
+[[python.module]]
+name = "ext_node_map_build"
+
+[fswatcher.patterns]
+include = ["*.py", "*.toml"]
+exclude = ["*/__pycache__/*", "*/.git/*"]

@@ -24,9 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'demo_fms_node = fms.demo_fms_node:main',
-            "scenario0_fms = fms.scenario0_fms:main",
-           
+            'fleet_management_system = fms.fleet_management_system:main',
         ],
     },
 )

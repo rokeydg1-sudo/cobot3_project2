@@ -11,7 +11,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from interfaces.srv import RequestTask
+from interfaces.msg import NodeMapChanged
+from interfaces.srv import GetNodeMap, RequestTask
 
 from fms.defined import (
     AMRState,
@@ -22,10 +23,7 @@ from fms.defined import (
     Task,
 )
 
-from fms.scenario0_cuopt_solver import CuOptSolver
-
-
-class Scenario0FMSNode(Node):
+class FleetManagementSystem(Node):
 
     # =====================================================
     # 기본 설정
@@ -42,6 +40,11 @@ class Scenario0FMSNode(Node):
     # AMR 상태 이벤트
     AMR_STATUS_TOPIC = "/amr/status"
 
+    # Isaac Sim NodeMap Service
+    NODE_MAP_SERVICE = "/get_node_map"
+    NODE_MAP_CHANGED_TOPIC = "/node_map_changed"
+    NODE_MAP_RETRY_INTERVAL_SEC = 2.0
+
     # 완료로 간주할 상태
     FINISHED_STATUSES = {
         "DELIVERY_COMPLETE",
@@ -50,7 +53,7 @@ class Scenario0FMSNode(Node):
 
     def __init__(self) -> None:
 
-        super().__init__("scenario0_fms")
+        super().__init__("FleetManagementSystem")
 
         # =================================================
         # FMS Task Queue
@@ -58,9 +61,7 @@ class Scenario0FMSNode(Node):
         # 아직 AMR에 할당되지 않은 waiting task
         # =================================================
 
-        self.task_queue: deque[Task] = deque(
-            maxlen=self.QUEUE_CAPACITY
-        )
+        self.task_queue: deque[Task] = deque(maxlen=self.QUEUE_CAPACITY)
 
         # =================================================
         # Active Task Registry
@@ -90,6 +91,17 @@ class Scenario0FMSNode(Node):
         # =================================================
 
         self.amr_states: dict[str, dict[str, str]] = {}
+
+        # =================================================
+        # Isaac Sim에서 받은 NodeMap Runtime 데이터
+        # =================================================
+
+        self.node_map_nodes: dict[int, dict[str, object]] = {}
+        self.node_map_edges: list[dict[str, object]] = []
+        self.node_map_revision = 0
+        self.expected_node_map_revision: int | None = None
+        self.node_map_request_pending = False
+        self.node_map_wait_logged = False
 
         # =================================================
         # Assembly -> FMS
@@ -127,6 +139,27 @@ class Scenario0FMSNode(Node):
         )
 
         # =================================================
+        # FMS -> Isaac Sim NodeMap Service Client
+        # =================================================
+
+        self.node_map_client = self.create_client(
+            GetNodeMap,
+            self.NODE_MAP_SERVICE,
+        )
+
+        self.node_map_changed_subscription = self.create_subscription(
+            NodeMapChanged,
+            self.NODE_MAP_CHANGED_TOPIC,
+            self.node_map_changed_callback,
+            10,
+        )
+        
+        self.node_map_request_timer = self.create_timer(
+            self.NODE_MAP_RETRY_INTERVAL_SEC,
+            self.request_node_map,
+        )
+
+        # =================================================
         # 시작 로그
         # =================================================
 
@@ -141,8 +174,160 @@ class Scenario0FMSNode(Node):
         self.get_logger().info(
             f"AMR Status     : {self.AMR_STATUS_TOPIC}"
         )
+        self.get_logger().info(
+            f"NodeMap Service: {self.NODE_MAP_SERVICE}"
+        )
+        self.get_logger().info(
+            f"NodeMap Event  : {self.NODE_MAP_CHANGED_TOPIC}"
+        )
         self.get_logger().info("Task Queue     : EMPTY")
         self.get_logger().info("=================================")
+
+
+
+
+# region FMS -> Isaac Sim NodeMap 요청
+
+    # =====================================================
+    # FMS -> Isaac Sim NodeMap 요청
+    # =====================================================
+
+    def node_map_changed_callback(self, message: NodeMapChanged) -> None:
+        self.expected_node_map_revision = int(message.revision)
+        self.get_logger().info(
+            f"[NODE MAP] Change detected: revision={message.revision}, "
+            f"Nodes={message.node_count}, Edges={message.edge_count}, "
+            f"Stage={message.stage_identifier}"
+        )
+        self.request_node_map(force=True)
+
+    def request_node_map(self, force: bool = False) -> None:
+        if self.node_map_request_pending:
+            return
+        if (
+            self.node_map_nodes
+            and self.expected_node_map_revision is None
+            and not force
+        ):
+            return
+
+        if not self.node_map_client.service_is_ready():
+            if not self.node_map_wait_logged:
+                self.get_logger().info(
+                    f"[NODE MAP] Waiting for {self.NODE_MAP_SERVICE}"
+                )
+                self.node_map_wait_logged = True
+            return
+
+        self.node_map_wait_logged = False
+        self.node_map_request_pending = True
+
+        self.get_logger().info("[NODE MAP] Requesting NodeMap from Isaac Sim")
+        future = self.node_map_client.call_async(GetNodeMap.Request())
+        future.add_done_callback(self.node_map_response_callback)
+
+    def node_map_response_callback(self, future) -> None:
+        self.node_map_request_pending = False
+
+        try:
+            response = future.result()
+            if response is None:
+                raise RuntimeError("GetNodeMap returned no response.")
+            if not response.success:
+                raise RuntimeError(response.message or "Isaac Sim rejected the request.")
+
+            nodes, edges = self._parse_node_map_response(response)
+            response_revision = int(response.revision)
+            if (
+                self.expected_node_map_revision is not None
+                and response_revision != self.expected_node_map_revision
+            ):
+                raise RuntimeError(
+                    "NodeMap revision mismatch: "
+                    f"expected={self.expected_node_map_revision}, "
+                    f"received={response_revision}"
+                )
+        except Exception as error:
+            self.get_logger().error(f"[NODE MAP] Request failed: {error}")
+            self.node_map_request_timer.reset()
+            return
+
+        self.node_map_nodes = nodes
+        self.node_map_edges = edges
+        self.node_map_revision = response_revision
+        self.expected_node_map_revision = None
+        self.node_map_request_timer.cancel()
+
+        self.get_logger().info(
+            f"[NODE MAP] Loaded revision={self.node_map_revision}, "
+            f"Nodes={len(nodes)}, Edges={len(edges)}"
+        )
+
+
+    # 노드맵 작명규칙에 따른 속성 데이터 주입.
+    @staticmethod
+    def _parse_node_map_response(response) -> tuple[
+        dict[int, dict[str, object]],
+        list[dict[str, object]],
+    ]:
+        node_fields = (
+            response.node_ids,
+            response.node_names,
+            response.node_types,
+            response.node_x,
+            response.node_y,
+            response.node_z,
+        )
+        node_count = len(response.node_ids)
+        if node_count == 0:
+            raise ValueError("NodeMap response contains no nodes.")
+        if any(len(field) != node_count for field in node_fields):
+            raise ValueError("NodeMap node arrays have different lengths.")
+
+        edge_fields = (
+            response.edge_from,
+            response.edge_to,
+            response.edge_weights,
+            response.edge_bidirectional,
+        )
+        edge_count = len(response.edge_from)
+        if any(len(field) != edge_count for field in edge_fields):
+            raise ValueError("NodeMap edge arrays have different lengths.")
+
+        nodes: dict[int, dict[str, object]] = {}
+        for index in range(node_count):
+            node_id = int(response.node_ids[index])
+            if node_id in nodes:
+                raise ValueError(f"Duplicate Node ID: {node_id}")
+
+            nodes[node_id] = {
+                "name": response.node_names[index],
+                "type": response.node_types[index],
+                "position": (
+                    float(response.node_x[index]),
+                    float(response.node_y[index]),
+                    float(response.node_z[index]),
+                ),
+                "available": True,
+            }
+
+        edges: list[dict[str, object]] = []
+        for index in range(edge_count):
+            start = int(response.edge_from[index])
+            end = int(response.edge_to[index])
+            if start not in nodes or end not in nodes:
+                raise ValueError(f"Edge references unknown Node: {start} -> {end}")
+
+            edges.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "weight": float(response.edge_weights[index]),
+                    "bidirectional": bool(response.edge_bidirectional[index]),
+                }
+            )
+
+        return nodes, edges
 
     # =====================================================
     # 문자열 key=value 메시지 Parser
@@ -167,6 +352,12 @@ class Scenario0FMSNode(Node):
             result[key.strip()] = value.strip()
 
         return result
+
+
+
+# endregion
+
+
 
     # =====================================================
     # Queue에 동일 task_id가 있는지 확인
@@ -493,6 +684,10 @@ class Scenario0FMSNode(Node):
 
         try:
 
+            # cuOpt/cudf는 실제 최적화 요청이 들어올 때만 필요하다.
+            # 이를 지연 import해 NodeMap 통신 확인은 cuOpt 환경 없이도 가능하다.
+            from fms.cuopt_solver import CuOptSolver
+
             optimization_request = OptimizationRequest(
                 tasks=tuple(tasks),
                 amr_state=amr_state,
@@ -633,7 +828,7 @@ def main(args: Sequence[str] | None = None) -> None:
 
     rclpy.init(args=args)
 
-    node = Scenario0FMSNode()
+    node = FleetManagementSystem()
 
     try:
         rclpy.spin(node)

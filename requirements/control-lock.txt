@@ -1,6 +1,7 @@
 --extra-index-url https://pypi.nvidia.com
 
 cachetools==7.1.7
+coverage==7.15.4
 cuda-bindings==13.3.1
 cuda-core==1.1.1
 cuda-pathfinder==1.6.1

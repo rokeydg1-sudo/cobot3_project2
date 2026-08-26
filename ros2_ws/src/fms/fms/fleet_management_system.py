@@ -14,6 +14,8 @@ from std_msgs.msg import String
 from interfaces.msg import NodeMapChanged
 from interfaces.srv import GetNodeMap, RequestTask
 
+from fms.NodeMapGraph import EdgeData, NodeData, NodeMapGraphManager
+
 from fms.defined import (
     AMRState,
     LOCATION_BY_ID,
@@ -96,12 +98,11 @@ class FleetManagementSystem(Node):
         # Isaac Sim에서 받은 NodeMap Runtime 데이터
         # =================================================
 
-        self.node_map_nodes: dict[int, dict[str, object]] = {}
-        self.node_map_edges: list[dict[str, object]] = []
-        self.node_map_revision = 0
-        self.expected_node_map_revision: int | None = None
-        self.node_map_request_pending = False
-        self.node_map_wait_logged = False
+        
+        self.csr_NodeMapGraph = NodeMapGraphManager()            # 노드맵 상태와 활성노드맵을 구성 담당 클래스
+        self.expected_node_map_revision: int | None = None     # 노드맵 버전번호
+        self.waiting_nodemap_response = False                  # NodeMap 응답 대기 상태
+        self.ready_to_nodemap_service = False                  # Service 준비 대기 상태
 
         # =================================================
         # Assembly -> FMS
@@ -201,33 +202,40 @@ class FleetManagementSystem(Node):
         )
         self.request_node_map(force=True)
 
+
+
+
     def request_node_map(self, force: bool = False) -> None:
-        if self.node_map_request_pending:
+        if self.waiting_nodemap_response:
             return
+        
         if (
-            self.node_map_nodes
+            self.csr_NodeMapGraph.nodes
             and self.expected_node_map_revision is None
             and not force
         ):
             return
 
         if not self.node_map_client.service_is_ready():
-            if not self.node_map_wait_logged:
+            if not self.ready_to_nodemap_service:
                 self.get_logger().info(
                     f"[NODE MAP] Waiting for {self.NODE_MAP_SERVICE}"
                 )
-                self.node_map_wait_logged = True
+                self.ready_to_nodemap_service = True
             return
 
-        self.node_map_wait_logged = False
-        self.node_map_request_pending = True
+        self.ready_to_nodemap_service = False
+        self.waiting_nodemap_response = True
 
         self.get_logger().info("[NODE MAP] Requesting NodeMap from Isaac Sim")
         future = self.node_map_client.call_async(GetNodeMap.Request())
         future.add_done_callback(self.node_map_response_callback)
 
+
+
+
     def node_map_response_callback(self, future) -> None:
-        self.node_map_request_pending = False
+        self.waiting_nodemap_response = False
 
         try:
             response = future.result()
@@ -236,6 +244,7 @@ class FleetManagementSystem(Node):
             if not response.success:
                 raise RuntimeError(response.message or "Isaac Sim rejected the request.")
 
+            # 노드, 엣지 데이터들 파싱 및 구조화
             nodes, edges = self._parse_node_map_response(response)
             response_revision = int(response.revision)
             if (
@@ -247,28 +256,37 @@ class FleetManagementSystem(Node):
                     f"expected={self.expected_node_map_revision}, "
                     f"received={response_revision}"
                 )
+
+
+            # 노드맵 구성 및 상태 업데이트
+            self.csr_NodeMapGraph.update_nodemap(
+                nodes,
+                edges,
+                response_revision,
+            )
         except Exception as error:
             self.get_logger().error(f"[NODE MAP] Request failed: {error}")
             self.node_map_request_timer.reset()
             return
 
-        self.node_map_nodes = nodes
-        self.node_map_edges = edges
-        self.node_map_revision = response_revision
+        # 노드맵 요청 완료처리
         self.expected_node_map_revision = None
         self.node_map_request_timer.cancel()
 
         self.get_logger().info(
-            f"[NODE MAP] Loaded revision={self.node_map_revision}, "
+            f"[NODE MAP] Loaded revision={self.csr_NodeMapGraph.revision}, "
             f"Nodes={len(nodes)}, Edges={len(edges)}"
         )
 
+        # 결과확인
+        self.print_node_map_csr()
 
-    # 노드맵 작명규칙에 따른 속성 데이터 주입.
+
+    # NVIDIA cuOpt 작명규칙에 따른 노드, 엣지 데이터 구성.
     @staticmethod
     def _parse_node_map_response(response) -> tuple[
-        dict[int, dict[str, object]],
-        list[dict[str, object]],
+        dict[int, NodeData],
+        list[EdgeData],
     ]:
         node_fields = (
             response.node_ids,
@@ -294,24 +312,23 @@ class FleetManagementSystem(Node):
         if any(len(field) != edge_count for field in edge_fields):
             raise ValueError("NodeMap edge arrays have different lengths.")
 
-        nodes: dict[int, dict[str, object]] = {}
+        nodes: dict[int, NodeData] = {}
         for index in range(node_count):
             node_id = int(response.node_ids[index])
             if node_id in nodes:
                 raise ValueError(f"Duplicate Node ID: {node_id}")
 
-            nodes[node_id] = {
-                "name": response.node_names[index],
-                "type": response.node_types[index],
-                "position": (
-                    float(response.node_x[index]),
-                    float(response.node_y[index]),
-                    float(response.node_z[index]),
-                ),
-                "available": True,
-            }
+            nodes[node_id] = NodeData(
+                node_id=node_id,
+                name=response.node_names[index],
+                node_type=response.node_types[index],
+                x=float(response.node_x[index]),
+                y=float(response.node_y[index]),
+                z=float(response.node_z[index]),
+                available=True,
+            )
 
-        edges: list[dict[str, object]] = []
+        edges: list[EdgeData] = []
         for index in range(edge_count):
             start = int(response.edge_from[index])
             end = int(response.edge_to[index])
@@ -319,15 +336,35 @@ class FleetManagementSystem(Node):
                 raise ValueError(f"Edge references unknown Node: {start} -> {end}")
 
             edges.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "weight": float(response.edge_weights[index]),
-                    "bidirectional": bool(response.edge_bidirectional[index]),
-                }
+                EdgeData(
+                    edge_id=index,
+                    start=start,
+                    end=end,
+                    weight=float(response.edge_weights[index]),
+                    bidirectional=bool(response.edge_bidirectional[index]),
+                    available=True,
+                    path_points=[
+                        (nodes[start].x, nodes[start].y, nodes[start].z),
+                        (nodes[end].x, nodes[end].y, nodes[end].z),
+                    ],
+                )
             )
 
         return nodes, edges
+
+    def print_node_map_csr(self) -> None:
+        """현재 NodeMap CSR을 FMS 실행 터미널에 출력한다."""
+        csr = self.csr_NodeMapGraph.get_csr()
+        print(
+            "\n========== NODE MAP CSR ==========\n"
+            f"revision : {self.csr_NodeMapGraph.revision}\n"
+            f"node_ids : {csr.node_ids}\n"
+            f"offsets  : {csr.offsets}\n"
+            f"indices  : {csr.indices}\n"
+            f"weights  : {csr.weights}\n"
+            "==================================",
+            flush=True,
+        )
 
     # =====================================================
     # 문자열 key=value 메시지 Parser

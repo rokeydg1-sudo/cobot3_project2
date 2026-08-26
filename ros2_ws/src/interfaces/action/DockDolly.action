@@ -1,0 +1,13 @@
+# Goal: AMR이 Vision Docking Server에 전달하는 Docking mission 식별자
+string amr_id
+string task_id
+---
+# Result: Dolly Docking 완료 또는 실패 결과
+bool success
+string message
+---
+# Feedback: Vision Docking의 현재 단계와 최신 pose 오차
+string state
+float32 distance_m
+float32 lateral_m
+float32 yaw_deg

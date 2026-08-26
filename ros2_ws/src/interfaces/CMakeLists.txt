@@ -6,6 +6,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/NodeMapChanged.msg"
+  "action/DockDolly.action"
   "action/VisualizeRoute.action"
   "srv/GetNodeMap.srv"
   "srv/RequestTask.srv"

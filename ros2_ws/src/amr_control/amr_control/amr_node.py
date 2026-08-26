@@ -9,7 +9,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
 from action_msgs.msg import GoalStatus
-from interfaces.action import VisualizeRoute
+from interfaces.action import DockDolly, VisualizeRoute
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
@@ -23,6 +23,12 @@ from interfaces.srv import RequestTask
 
 # NavigateToPose 한 구간(Pickup / Delivery)의 최대 대기 시간
 MOVE_TIMEOUT_SEC = 60.0
+
+# Vision Dolly Docking Action의 최대 대기 시간
+DOCK_TIMEOUT_SEC = 120.0
+
+# DockDolly Action Server 준비 대기 시간
+DOCK_SERVER_WAIT_TIMEOUT_SEC = 5.0
 
 # FMS에 다음 작업을 요청하는 주기
 TASK_REQUEST_INTERVAL_SEC = 1.0
@@ -43,6 +49,17 @@ class AMRNode(Node):
         # =================================================
 
         self.amr_id = "AMR_01"
+
+        self.declare_parameter(
+            "dock_action_name",
+            "/dock_dolly",
+        )
+
+        self.dock_action_name = str(
+            self.get_parameter(
+                "dock_action_name"
+            ).value
+        )
 
 
         # =================================================
@@ -114,6 +131,20 @@ class AMRNode(Node):
             self,
             NavigateToPose,
             "/navigate_to_pose",
+            callback_group=self.action_group,
+        )
+
+
+        # =================================================
+        # AMR -> Vision Docking
+        #
+        # Pickup 좌표까지의 Nav2 Goal이 성공한 뒤에만 실행한다.
+        # =================================================
+
+        self.dock_client = ActionClient(
+            self,
+            DockDolly,
+            self.dock_action_name,
             callback_group=self.action_group,
         )
 
@@ -206,6 +237,10 @@ class AMRNode(Node):
 
         self.get_logger().info(
             "Nav2 Action    : /navigate_to_pose"
+        )
+
+        self.get_logger().info(
+            f"Dock Action    : {self.dock_action_name}"
         )
 
         self.get_logger().info(
@@ -656,6 +691,36 @@ class AMRNode(Node):
 
 
             # =================================================
+            # Pickup 좌표는 현재 Pre-Docking pose로 취급한다.
+            # Nav2 Goal이 종료된 뒤 Vision이 /cmd_vel 제어권을 가진다.
+            # =================================================
+
+            self.publish_status(
+                "PRE_DOCKING"
+            )
+
+
+            docking_success = (
+                self.dock_dolly()
+            )
+
+
+            if not docking_success:
+
+                self.handle_task_failure(
+                    "Dolly docking failed for "
+                    f"task {self.current_task_id}"
+                )
+
+                return
+
+
+            self.publish_status(
+                "DOCKING_COMPLETE"
+            )
+
+
+            # =================================================
             # Pickup 도착
             # =================================================
 
@@ -864,6 +929,198 @@ class AMRNode(Node):
         except Exception:
 
             pass
+
+    # =====================================================
+    # DockDolly Feedback
+    #
+    # Vision 상태와 최신 pose 오차를 0.75초에 한 번만 출력
+    # =====================================================
+
+    def dock_feedback_callback(
+        self,
+        feedback_msg,
+    ):
+
+        now = time.monotonic()
+
+        if not hasattr(
+            self,
+            "_last_dock_feedback_log_time",
+        ):
+
+            self._last_dock_feedback_log_time = 0.0
+
+        if (
+            now
+            - self._last_dock_feedback_log_time
+            < 0.75
+        ):
+
+            return
+
+        self._last_dock_feedback_log_time = now
+        feedback = feedback_msg.feedback
+
+        self.get_logger().info(
+            "[DOCKING] "
+            f"state={feedback.state}, "
+            f"distance={feedback.distance_m:.3f}m, "
+            f"lateral={feedback.lateral_m:+.3f}m, "
+            f"yaw={feedback.yaw_deg:+.2f}deg"
+        )
+
+    # =====================================================
+    # Vision Dolly Docking
+    #
+    # Worker Thread는 Event로 Goal/Result를 기다리고,
+    # Action callback은 MultiThreadedExecutor에서 처리한다.
+    # =====================================================
+
+    def dock_dolly(self):
+
+        self.get_logger().info(
+            f"[DOCKING] Waiting for {self.dock_action_name}..."
+        )
+
+        if not self.dock_client.wait_for_server(
+            timeout_sec=DOCK_SERVER_WAIT_TIMEOUT_SEC
+        ):
+
+            self.get_logger().error(
+                "DockDolly Action Server is not available."
+            )
+            return False
+
+        goal_msg = DockDolly.Goal()
+        goal_msg.amr_id = self.amr_id
+        goal_msg.task_id = self.current_task_id
+
+        goal_response_event = threading.Event()
+        result_event = threading.Event()
+
+        goal_handle_box = {
+            "handle": None,
+        }
+        result_box = {
+            "status": None,
+            "result": None,
+            "error": None,
+        }
+
+        self._last_dock_feedback_log_time = 0.0
+
+        try:
+            send_goal_future = self.dock_client.send_goal_async(
+                goal_msg,
+                feedback_callback=self.dock_feedback_callback,
+            )
+        except Exception as error:
+            self.get_logger().error(
+                f"[DOCKING] Goal send failed: {error}"
+            )
+            return False
+
+        def goal_response_callback(future):
+
+            try:
+                goal_handle = future.result()
+                goal_handle_box["handle"] = goal_handle
+
+                if not goal_handle.accepted:
+                    self.get_logger().error(
+                        "[DOCKING] Goal was rejected."
+                    )
+                    goal_response_event.set()
+                    result_event.set()
+                    return
+
+                self.get_logger().info(
+                    "[DOCKING] Goal accepted."
+                )
+                self.publish_status(
+                    "DOCKING"
+                )
+                goal_response_event.set()
+
+                result_future = goal_handle.get_result_async()
+
+                def result_callback(done_future):
+
+                    try:
+                        wrapped_result = done_future.result()
+                        result_box["status"] = wrapped_result.status
+                        result_box["result"] = wrapped_result.result
+                    except Exception as error:
+                        result_box["error"] = error
+                    finally:
+                        result_event.set()
+
+                result_future.add_done_callback(
+                    result_callback
+                )
+
+            except Exception as error:
+                result_box["error"] = error
+                goal_response_event.set()
+                result_event.set()
+
+        send_goal_future.add_done_callback(
+            goal_response_callback
+        )
+
+        if not goal_response_event.wait(timeout=10.0):
+            self.get_logger().error(
+                "[DOCKING] Goal response timeout."
+            )
+            return False
+
+        goal_handle = goal_handle_box["handle"]
+
+        if goal_handle is None or not goal_handle.accepted:
+            return False
+
+        if not result_event.wait(timeout=DOCK_TIMEOUT_SEC):
+            self.get_logger().error(
+                "[DOCKING] Action result timeout."
+            )
+
+            try:
+                goal_handle.cancel_goal_async()
+            except Exception:
+                pass
+
+            return False
+
+        if result_box["error"] is not None:
+            self.get_logger().error(
+                "[DOCKING] Action error: "
+                f"{result_box['error']}"
+            )
+            return False
+
+        result = result_box["result"]
+        status = result_box["status"]
+
+        if (
+            status == GoalStatus.STATUS_SUCCEEDED
+            and result is not None
+            and result.success
+        ):
+            self.get_logger().info(
+                f"[DOCKING] {result.message}"
+            )
+            return True
+
+        message = (
+            "No DockDolly result"
+            if result is None
+            else result.message
+        )
+        self.get_logger().error(
+            "[DOCKING] Docking failed: "
+            f"status={status}, message={message}"
+        )
+        return False
 
 
     # =====================================================

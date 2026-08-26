@@ -116,3 +116,70 @@ FMS Service
 Task Request Timer
 
 Nav2 Action
+
+6. Vision Dolly Docking 통합
+
+AMR Node는 Pickup 좌표를 현재 단계의 Pre-Docking pose로 취급한다. 별도의
+Pre-Docking 좌표 계산은 하지 않는다. Pickup `NavigateToPose`가
+`SUCCEEDED`로 끝난 후 `/dock_dolly`에 `DockDolly` Goal을 보내며, Goal에는
+현재 `amr_id`와 `task_id`가 포함된다.
+
+```text
+MOVING_TO_PICKUP
+  -> NavigateToPose SUCCEEDED
+  -> PRE_DOCKING
+  -> DockDolly Goal accepted
+  -> DOCKING
+  -> DOCKING_COMPLETE
+  -> ARRIVED_PICKUP
+  -> LOADING
+```
+
+Docking Result가 `success=true`이고 Action 상태도 `SUCCEEDED`인 경우에만
+`ARRIVED_PICKUP`과 `LOADING`으로 진행한다. Action Server 미준비, Goal 거절,
+Goal/Result timeout, 예외, canceled/aborted 상태 또는 `success=false`는 모두
+기존 `handle_task_failure()`로 연결되어 `TASK_FAILED`와 `ERROR` 상태가 된다.
+
+7. Callback group / executor 구조
+
+AMR Node는 `MultiThreadedExecutor(num_threads=4)`를 사용한다. `/amr/odom`,
+FMS Service, Task 요청 Timer, Action callback은 각각의
+`MutuallyExclusiveCallbackGroup`으로 분리된다. `VisualizeRoute`,
+`NavigateToPose`, `DockDolly`는 순차 Mission이므로 같은 `action_group`을
+사용한다. Task worker thread는 ROS callback을 직접 spin하지 않고
+`threading.Event`로 Action Goal과 Result를 기다린다.
+
+8. 전체 Task state/event 흐름
+
+```text
+IDLE
+  -> TASK_ASSIGNED
+  -> VisualizeRoute
+  -> MOVING_TO_PICKUP
+  -> PRE_DOCKING
+  -> DOCKING
+  -> DOCKING_COMPLETE
+  -> ARRIVED_PICKUP
+  -> LOADING
+  -> LOAD_COMPLETE
+  -> MOVING_TO_DELIVERY
+  -> ARRIVED_DELIVERY
+  -> DELIVERY_COMPLETE
+  -> MISSION_COMPLETE
+  -> IDLE
+```
+
+9. ROS 통신 계약
+
+| 종류 | 이름 | 타입 | 방향 | 역할 |
+|---|---|---|---|---|
+| Service | `/fms/request_task` | `interfaces/srv/RequestTask` | AMR -> FMS | IDLE AMR의 Pull 방식 Task 요청 |
+| Action | `/visualize_route` | `interfaces/action/VisualizeRoute` | AMR -> Isaac Sim | 계획 경로 시각화 |
+| Action | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | AMR -> Nav2 | Pickup/Delivery 이동 |
+| Action | `/dock_dolly` | `interfaces/action/DockDolly` | AMR -> Vision | Dolly 인식 기반 미세 정렬 및 진입 |
+| Topic | `/amr/odom` | `nav_msgs/msg/Odometry` | Isaac Sim -> AMR | 현재 위치 갱신 및 FMS 요청 좌표 |
+| Topic | `/amr/status` | `std_msgs/msg/String` | AMR -> FMS | Task lifecycle event 발행 |
+
+`/dock_dolly` 이름은 `dock_action_name` parameter로 변경할 수 있다. Nav2
+Goal이 종료된 다음에만 DockDolly Goal을 보내므로 Nav2와 Vision이 동시에
+`/cmd_vel`을 제어하지 않는다.

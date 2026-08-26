@@ -1,0 +1,47 @@
+dolly_docking_node:
+  ros__parameters:
+    # ROS I/O
+    image_topic: /vision/front_camera/image_raw
+    cmd_vel_topic: /cmd_vel
+
+    # Safe integration default. Override at launch with:
+    # publish_cmd_vel:=true
+    publish_cmd_vel: false
+
+    # Runtime
+    process_hz: 10.0
+    detection_conf: 0.25
+    keypoint_conf: 0.35
+    pnp_reprojection_error_px: 12.0
+
+    # Vision -> straight-entry handoff
+    handoff_distance_m: 2.30
+    done_lateral_m: 0.20
+    done_yaw_deg: 10.0
+
+    # Approach / alignment
+    drive_lateral_limit_m: 0.20
+    drive_yaw_limit_deg: 12.0
+    k_distance: 0.25
+    k_yaw: 0.9
+    k_lateral: 1.2
+
+    max_linear_mps: 0.12
+    min_linear_mps: 0.04
+    max_angular_rps: 0.25
+    min_align_angular_rps: 0.08
+
+    angular_sign: 1.0
+    yaw_sign: -1.0
+
+    # Final straight entry
+    enable_final_entry: true
+    final_entry_distance_m: 4.60
+    final_entry_speed_mps: 0.18
+    image_watchdog_timeout_s: 0.75
+
+    # Close-range PnP fallback
+    invalid_frames_before_handoff: 3
+    fallback_distance_m: 2.35
+    fallback_lateral_m: 0.23
+    fallback_yaw_deg: 11.0

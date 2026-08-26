@@ -11,3 +11,4 @@ vision/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
 vision/**/*.exr filter=lfs diff=lfs merge=lfs -text
 vision/**/*.hdr filter=lfs diff=lfs merge=lfs -text
 vision/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
+ros2_ws/src/vision_docking/models/*.pt filter=lfs diff=lfs merge=lfs -text

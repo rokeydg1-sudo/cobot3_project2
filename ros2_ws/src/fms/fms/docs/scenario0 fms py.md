@@ -120,3 +120,11 @@ cell_b      → ( 7.0, 0.0)
 cell_c      → ( 7.0,-3.5)
 
 AMR Node는 이 좌표를 그대로 Nav2 Goal에 넣는다.
+
+7. Vision Docking 연결 이후 유지되는 FMS 계약
+
+FMS의 Task schema, cuOpt 최적화, assignment 및 완료 판정은 변경하지 않는다.
+FMS가 전달하는 `pickup_x`와 `pickup_y`는 AMR이 도달할 Pre-Docking pose로
+취급한다. 이후 `/dock_dolly` 실행과 `PRE_DOCKING`, `DOCKING`,
+`DOCKING_COMPLETE` event는 AMR 내부 Mission 단계이며, FMS는 기존과 같이
+`DELIVERY_COMPLETE` 또는 `MISSION_COMPLETE`를 기준으로 Task를 완료 처리한다.

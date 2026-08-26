@@ -1,0 +1,7 @@
+Python 3.12.3
+pip 26.2.1 from /home/rokey/cobot3_projects/cobot3_project2/vision/.venv/lib/python3.12/site-packages/pip (python 3.12)
+numpy: 1.26.4
+opencv: 4.11.0
+torch: 2.11.0+cu128
+cuda: True
+ultralytics: 8.4.129

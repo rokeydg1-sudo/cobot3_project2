@@ -1,0 +1,10 @@
+Dolly YOLO Pose model
+created=2026-08-26T12:55:28.635773
+base_model=yolo26n-pose.pt
+dataset=/home/rokey/cobot3_projects/cobot3_project2/vision/isaac_sim/vision_docking/outputs/dataset/dataset.yaml
+epochs=80
+imgsz=640
+batch=-1
+patience=15
+source_best=/home/rokey/cobot3_projects/cobot3_project2/vision/isaac_sim/vision_docking/outputs/training/dolly_pose_yolo26n_v1/weights/best.pt
+runtime_model=/home/rokey/cobot3_projects/cobot3_project2/vision/isaac_sim/vision_docking/outputs/weights/dolly_pose_v1_best.pt

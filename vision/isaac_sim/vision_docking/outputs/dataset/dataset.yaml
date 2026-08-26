@@ -1,0 +1,9 @@
+path: /home/rokey/cobot3_projects/cobot3_project2/vision/isaac_sim/vision_docking/outputs/dataset
+train: images/train
+val: images/val
+
+kpt_shape: [8, 3]
+flip_idx: [1, 0, 3, 2, 6, 7, 4, 5]
+
+names:
+  0: dolly

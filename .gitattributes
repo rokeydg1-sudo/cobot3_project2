@@ -1,0 +1,13 @@
+vision/**/*.pt filter=lfs diff=lfs merge=lfs -text
+vision/**/*.pth filter=lfs diff=lfs merge=lfs -text
+vision/**/*.onnx filter=lfs diff=lfs merge=lfs -text
+vision/**/*.npz filter=lfs diff=lfs merge=lfs -text
+vision/**/*.npy filter=lfs diff=lfs merge=lfs -text
+vision/**/*.usd filter=lfs diff=lfs merge=lfs -text
+vision/**/*.usdc filter=lfs diff=lfs merge=lfs -text
+vision/**/*.png filter=lfs diff=lfs merge=lfs -text
+vision/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+vision/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
+vision/**/*.exr filter=lfs diff=lfs merge=lfs -text
+vision/**/*.hdr filter=lfs diff=lfs merge=lfs -text
+vision/**/*.mp4 filter=lfs diff=lfs merge=lfs -text

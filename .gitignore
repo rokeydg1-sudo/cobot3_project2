@@ -41,3 +41,23 @@ Thumbs.db
 
 # Integration smoke test generated files
 /tests/integration/cuopt_fms_smoke/cuopt_route.json
+
+# Vision local Python environment
+vision/.venv/
+
+# Python/runtime caches
+vision/**/__pycache__/
+vision/**/.pytest_cache/
+vision/**/.cache/
+
+# Ultralytics downloaded pretrained weights
+/yolo26n-pose.pt
+/weights/
+
+# Vision local Python environment
+vision/.venv/
+
+# Python caches
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/

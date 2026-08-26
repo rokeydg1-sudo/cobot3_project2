@@ -9,6 +9,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
 from action_msgs.msg import GoalStatus
+from interfaces.action import VisualizeRoute
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
@@ -91,6 +92,13 @@ class AMRNode(Node):
             RequestTask,
             "/fms/request_task",
             callback_group=self.service_group,
+        )
+
+        self.route_visualizer_client = ActionClient(
+            self,
+            VisualizeRoute,
+            "/visualize_route",
+            callback_group=self.action_group,
         )
 
 
@@ -190,6 +198,10 @@ class AMRNode(Node):
 
         self.get_logger().info(
             "Task Service   : /fms/request_task"
+        )
+
+        self.get_logger().info(
+            "Route Service  : /visualize_route"
         )
 
         self.get_logger().info(
@@ -514,15 +526,85 @@ class AMRNode(Node):
             "TASK_ASSIGNED"
         )
 
+        self.send_route_to_isaac(response)
 
-        # 실제 Mission은 Blocking 대기를 포함하므로
-        # Worker Thread에서 수행
-        worker = threading.Thread(
-            target=self.execute_task,
-            args=(response,),
-            daemon=True,
+    def send_route_to_isaac(self, task) -> None:
+        """FMS에서 받은 계획 경로를 Isaac Sim에 전달한다."""
+        route_size = len(task.route_node_ids)
+        coordinate_sizes = (
+            len(task.route_x),
+            len(task.route_y),
+            len(task.route_z),
         )
 
+        if route_size == 0 or any(
+            size not in (0, route_size) for size in coordinate_sizes
+        ):
+            self.handle_task_failure("Invalid Planned Route received from FMS.")
+            return
+
+        if len(set(coordinate_sizes)) != 1:
+            self.handle_task_failure(
+                "Planned Route XYZ arrays have different lengths."
+            )
+            return
+
+        if not self.route_visualizer_client.server_is_ready():
+            self.handle_task_failure("Waiting for Isaac Sim Route Action Server.")
+            return
+
+        goal = VisualizeRoute.Goal()
+        goal.amr_id = self.amr_id
+        goal.task_id = task.task_id
+        goal.node_map_revision = task.node_map_revision
+        goal.node_ids = list(task.route_node_ids)
+        goal.node_x = list(task.route_x)
+        goal.node_y = list(task.route_y)
+        goal.node_z = list(task.route_z)
+
+        self.get_logger().info(
+            f"[PLANNED ROUTE] Sending to Isaac Sim: {goal.node_ids}"
+        )
+        future = self.route_visualizer_client.send_goal_async(goal)
+        future.add_done_callback(
+            lambda result: self.route_goal_response_callback(result, task)
+        )
+
+    def route_goal_response_callback(self, future, task) -> None:
+        try:
+            goal_handle = future.result()
+        except Exception as error:
+            self.handle_task_failure(f"Route visualization Goal failed: {error}")
+            return
+
+        if not goal_handle.accepted:
+            self.handle_task_failure("Route visualization Goal was rejected.")
+            return
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            lambda result: self.route_result_callback(result, task)
+        )
+
+    def route_result_callback(self, future, task) -> None:
+        try:
+            result = future.result().result
+        except Exception as error:
+            self.handle_task_failure(
+                f"Route visualization Result failed: {error}"
+            )
+            return
+
+        if not result.success:
+            self.handle_task_failure(result.message)
+            return
+
+        self.get_logger().info(f"[PLANNED ROUTE] {result.message}")
+        worker = threading.Thread(
+            target=self.execute_task,
+            args=(task,),
+            daemon=True,
+        )
         worker.start()
 
 

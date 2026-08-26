@@ -8,9 +8,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/NodeMapChanged.msg"
   "action/VisualizeRoute.action"
   "srv/GetNodeMap.srv"
-  "srv/RequestTask.srv"
 )
 
 ament_export_dependencies(rosidl_default_runtime)
-
 ament_package()

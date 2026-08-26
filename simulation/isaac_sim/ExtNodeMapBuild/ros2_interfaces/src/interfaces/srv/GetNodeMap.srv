@@ -1,0 +1,16 @@
+---
+bool success
+string message
+uint64 revision
+
+int32[] node_ids
+string[] node_names
+string[] node_types
+float64[] node_x
+float64[] node_y
+float64[] node_z
+
+int32[] edge_from
+int32[] edge_to
+float64[] edge_weights
+bool[] edge_bidirectional

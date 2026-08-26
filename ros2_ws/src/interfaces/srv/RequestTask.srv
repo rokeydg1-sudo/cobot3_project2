@@ -1,3 +1,4 @@
+# AMR -> FMS: 작업 요청을 보내는 AMR의 현재 상태
 string amr_id
 string state
 string current_task_id
@@ -5,14 +6,36 @@ float64 x
 float64 y
 string load_state
 ---
+
+# FMS -> AMR: 작업 할당 결과와 기본 작업 정보
 bool has_task
 string task_id
 string kit_id
 float64 processing_time
+
+# 작업 시작 Node와 실제 XY 좌표 (junction)
 string pickup_id
 float64 pickup_x
 float64 pickup_y
+
+# 작업 도착 Node와 실제 XY 좌표
 string delivery_id
 float64 delivery_x
 float64 delivery_y
+
+# 이 경로를 계획할 때 사용한 NodeMap 버전
+uint64 node_map_revision
+
+# 시작 Node에서 도착 Node까지 통과할 Node의 순서와 XYZ 좌표
+# 모든 배열은 길이가 같으며, 같은 index의 값이 하나의 Node를 나타낸다.
+# route_node_ids[i] <-> route_x[i], route_y[i], route_z[i]
+int32[] route_node_ids
+float64[] route_x
+float64[] route_y
+float64[] route_z
+
+# 경로에 포함된 Edge weight의 총합
+float64 route_total_cost
+
+# 작업 할당 결과 또는 실패 이유
 string message

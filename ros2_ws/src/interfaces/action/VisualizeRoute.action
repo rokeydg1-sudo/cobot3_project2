@@ -1,0 +1,17 @@
+# ===== Goal: AMR이 주행 직전에 전달하는 현재 Step 경로 =====
+string amr_id
+string task_id
+uint64 node_map_revision
+int32[] node_ids
+
+# 향후 좌표 정합성 검증용. 현재는 빈 배열도 허용한다.
+float64[] node_x
+float64[] node_y
+float64[] node_z
+---
+# ===== Result: Isaac Sim 시각화 처리 결과 =====
+bool success
+string message
+---
+# ===== Feedback: 현재 시각화 처리 상태 =====
+string status

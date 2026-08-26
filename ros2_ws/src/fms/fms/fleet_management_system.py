@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Scenario 0의 작업큐, cuOpt 호출, AMR Pull 요청을 관리하는 FMS ROS 2 Node."""
+"""NodeMap 기반 작업큐, cuOpt 경로계획, AMR 요청을 관리하는 FMS."""
 
 from __future__ import annotations
 
-import time
-from collections import deque
 from typing import Sequence
 
 import rclpy
@@ -14,16 +12,22 @@ from std_msgs.msg import String
 from interfaces.msg import NodeMapChanged
 from interfaces.srv import GetNodeMap, RequestTask
 
-from fms.NodeMapGraph import EdgeData, NodeData, NodeMapGraphManager
-
-from fms.defined import (
+from fms.NodeMapGraph import (
+    EdgeData,
+    NodeData,
+    NodeMapGraphManager,
+)
+from fms.TaskManager import (
     AMRState,
-    LOCATION_BY_ID,
-    PARTS_SUPERMARKET,
     OptimizationRequest,
     OptimizationResult,
-    Task,
+    TaskManager,
 )
+
+
+# 시나리오 검증 중에만 True로 사용한다.
+TEST_MODE = True
+
 
 class FleetManagementSystem(Node):
 
@@ -32,9 +36,6 @@ class FleetManagementSystem(Node):
     # =====================================================
 
     QUEUE_CAPACITY = 10
-
-    # 실제 Assembly Node에서 사용 중인 Topic
-    TASK_REQUEST_TOPIC = "/assembly/request"
 
     # AMR Pull 요청 Service
     TASK_REQUEST_SERVICE = "/fms/request_task"
@@ -57,36 +58,10 @@ class FleetManagementSystem(Node):
 
         super().__init__("FleetManagementSystem")
 
-        # =================================================
-        # FMS Task Queue
-        #
-        # 아직 AMR에 할당되지 않은 waiting task
-        # =================================================
-
-        self.task_queue: deque[Task] = deque(maxlen=self.QUEUE_CAPACITY)
-
-        # =================================================
-        # Active Task Registry
-        #
-        # 이미 어떤 AMR에 할당된 작업을 저장
-        #
-        # key   : task_id
-        # value : Task
-        # =================================================
-
-        self.active_tasks: dict[str, Task] = {}
-
-        # =================================================
-        # 마지막 최적화 결과
-        # =================================================
-
+        self.task_manager = TaskManager(self.QUEUE_CAPACITY)
         self.latest_plan: OptimizationResult | None = None
-
-        # =================================================
-        # cuOpt 실행 중 여부
-        # =================================================
-
         self.is_optimizing = False
+        self.validation_task_created = False
 
         # =================================================
         # AMR 상태 저장
@@ -99,22 +74,10 @@ class FleetManagementSystem(Node):
         # =================================================
 
         
-        self.csr_NodeMapGraph = NodeMapGraphManager()            # 노드맵 상태와 활성노드맵을 구성 담당 클래스
+        self.node_map_graph = NodeMapGraphManager()
         self.expected_node_map_revision: int | None = None     # 노드맵 버전번호
         self.waiting_nodemap_response = False                  # NodeMap 응답 대기 상태
         self.ready_to_nodemap_service = False                  # Service 준비 대기 상태
-
-        # =================================================
-        # Assembly -> FMS
-        # Task 요청
-        # =================================================
-
-        self.task_subscription = self.create_subscription(
-            String,
-            self.TASK_REQUEST_TOPIC,
-            self.task_request_callback,
-            self.QUEUE_CAPACITY,
-        )
 
         # =================================================
         # AMR -> FMS
@@ -165,10 +128,7 @@ class FleetManagementSystem(Node):
         # =================================================
 
         self.get_logger().info("=================================")
-        self.get_logger().info("Scenario 0 FMS started")
-        self.get_logger().info(
-            f"Assembly Topic : {self.TASK_REQUEST_TOPIC}"
-        )
+        self.get_logger().info("NodeMap-based FMS started")
         self.get_logger().info(
             f"Task Service   : {self.TASK_REQUEST_SERVICE}"
         )
@@ -210,7 +170,7 @@ class FleetManagementSystem(Node):
             return
         
         if (
-            self.csr_NodeMapGraph.nodes
+            self.node_map_graph.nodes
             and self.expected_node_map_revision is None
             and not force
         ):
@@ -259,7 +219,7 @@ class FleetManagementSystem(Node):
 
 
             # 노드맵 구성 및 상태 업데이트
-            self.csr_NodeMapGraph.update_nodemap(
+            self.node_map_graph.update_nodemap(
                 nodes,
                 edges,
                 response_revision,
@@ -274,12 +234,15 @@ class FleetManagementSystem(Node):
         self.node_map_request_timer.cancel()
 
         self.get_logger().info(
-            f"[NODE MAP] Loaded revision={self.csr_NodeMapGraph.revision}, "
+            f"[NODE MAP] Loaded revision={self.node_map_graph.revision}, "
             f"Nodes={len(nodes)}, Edges={len(edges)}"
         )
 
         # 결과확인
         self.print_node_map_csr()
+
+        if TEST_MODE and not self.validation_task_created:
+            self.create_validation_task()
 
 
     # NVIDIA cuOpt 작명규칙에 따른 노드, 엣지 데이터 구성.
@@ -354,10 +317,10 @@ class FleetManagementSystem(Node):
 
     def print_node_map_csr(self) -> None:
         """현재 NodeMap CSR을 FMS 실행 터미널에 출력한다."""
-        csr = self.csr_NodeMapGraph.get_csr()
+        csr = self.node_map_graph.get_csr()
         print(
             "\n========== NODE MAP CSR ==========\n"
-            f"revision : {self.csr_NodeMapGraph.revision}\n"
+            f"revision : {self.node_map_graph.revision}\n"
             f"node_ids : {csr.node_ids}\n"
             f"offsets  : {csr.offsets}\n"
             f"indices  : {csr.indices}\n"
@@ -396,186 +359,36 @@ class FleetManagementSystem(Node):
 
 
 
-    # =====================================================
-    # Queue에 동일 task_id가 있는지 확인
-    # =====================================================
-
-    def is_task_in_queue(self, task_id: str) -> bool:
-
-        return any(
-            queued.task_id == task_id
-            for queued in self.task_queue
-        )
-
-    # =====================================================
-    # Active Task인지 확인
-    # =====================================================
-
-    def is_task_active(self, task_id: str) -> bool:
-
-        return task_id in self.active_tasks
-
-    # =====================================================
-    # Queue 상태 로그
-    # =====================================================
-
     def log_queue_summary(self) -> None:
-
         self.get_logger().info(
-            f"[QUEUE] waiting={len(self.task_queue)} "
-            f"active={len(self.active_tasks)}"
+            f"[QUEUE] waiting={self.task_manager.waiting_count} "
+            f"active={self.task_manager.active_count}"
         )
 
-    # =====================================================
-    # Assembly -> FMS
-    #
-    # Task 요청 수신
-    #
-    # 현재 Assembly 메시지 예:
-    #
-    # cell_id=A,
-    # task_id=1,
-    # kit_id=KIT_STAR,
-    # shape=STAR,
-    # processing_time=3.0
-    #
-    # 현재 Assembly에는 아직
-    # urgency / requested_at / deadline이 없으므로
-    # Scenario 0 기본값을 임시 적용
-    # =====================================================
-
-    def task_request_callback(self, message: String) -> None:
-
-        try:
-
-            fields = self.parse_key_value_message(
-                message.data
-            )
-
-            # =============================================
-            # 필수 값 확인
-            # =============================================
-
-            cell_id = fields.get("cell_id")
-            task_id = fields.get("task_id")
-            kit_id = fields.get("kit_id")
-            processing_time = fields.get("processing_time")
-
-            if (
-                cell_id is None
-                or task_id is None
-                or kit_id is None
-                or processing_time is None
-            ):
-                raise ValueError(
-                    "Assembly request requires "
-                    "cell_id, task_id, kit_id, processing_time."
-                )
-
-            # =============================================
-            # Cell 이름 통일
-            # A -> cell_a
-            # =============================================
-
-            delivery_cell = f"cell_{cell_id.lower()}"
-
-            # =============================================
-            # Scenario 0 임시 metadata
-            # =============================================
-
-            urgency = int(fields.get("urgency", 1))
-
-            requested_at = int(
-                fields.get("requested_at", int(time.monotonic()))
-            )
-
-            deadline = int(
-                fields.get("deadline", requested_at + 600)
-            )
-
-            # =============================================
-            # Task 생성
-            # =============================================
-
-            task = Task(
-                task_id=str(task_id),
-                kit_id=str(kit_id),
-                delivery_cell=delivery_cell,
-                urgency=urgency,
-                requested_at=requested_at,
-                deadline=deadline,
-                processing_time=float(processing_time),
-            )
-
-            self.add_task(task)
-
-        except (ValueError, OverflowError) as error:
-
-            self.get_logger().warning(
-                f"Rejected Assembly Task: {error}"
-            )
-            return
+    def create_validation_task(self) -> None:
+        """NodeMap의 연결 가능한 두 Node로 검증용 Task를 생성한다."""
+        start_node_id, goal_node_id = (
+            self.node_map_graph.choose_random_reachable_nodes()
+        )
+        start = self.node_map_graph.nodes[start_node_id]
+        goal = self.node_map_graph.nodes[goal_node_id]
+        task = self.task_manager.create_task(
+            start,
+            goal,
+            task_id="validation_task_01",
+            kit_id="VALIDATION",
+        )
+        self.validation_task_created = True
 
         self.get_logger().info(
-            f"[TASK QUEUED] "
-            f"{task.task_id} {task.kit_id} -> {task.delivery_cell} "
-            f"(processing={task.processing_time:.1f}s) "
-            f"queue={len(self.task_queue)}/{self.QUEUE_CAPACITY}"
+            "\n========== VALIDATION TASK ==========\n"
+            f"Task ID : {task.task_id}\n"
+            f"Start   : {start.name} ({start.x:.2f}, {start.y:.2f}, {start.z:.2f})\n"
+            f"Goal    : {goal.name} ({goal.x:.2f}, {goal.y:.2f}, {goal.z:.2f})\n"
+            f"Status  : {task.status}\n"
+            f"Queue   : {self.task_manager.waiting_count}/{self.QUEUE_CAPACITY}\n"
+            "====================================="
         )
-
-        self.log_queue_summary()
-
-    # =====================================================
-    # Task Queue 추가
-    # =====================================================
-
-    def add_task(self, task: Task) -> None:
-
-        # =================================================
-        # Queue Full
-        # =================================================
-
-        if len(self.task_queue) >= self.QUEUE_CAPACITY:
-            raise OverflowError(
-                f"Task queue is full (capacity={self.QUEUE_CAPACITY})."
-            )
-
-        # =================================================
-        # Cell 확인
-        # =================================================
-
-        if task.delivery_cell not in {
-            "cell_a",
-            "cell_b",
-            "cell_c",
-        }:
-            raise ValueError(
-                f"Unknown Assembly Cell: {task.delivery_cell}"
-            )
-
-        # =================================================
-        # 중복 Task 방지
-        #
-        # 1) waiting queue 안에 이미 있으면 무시
-        # 2) active_tasks 안에 이미 있으면 무시
-        #
-        # Assembly가 같은 task_id를
-        # 재전송할 수 있으므로 반드시 필요
-        # =================================================
-
-        if self.is_task_in_queue(task.task_id):
-            raise ValueError(
-                f"Duplicate task_id already in waiting queue: "
-                f"{task.task_id}"
-            )
-
-        if self.is_task_active(task.task_id):
-            raise ValueError(
-                f"Duplicate task_id already active: "
-                f"{task.task_id}"
-            )
-
-        self.task_queue.append(task)
 
     # =====================================================
     # AMR 상태 Event 수신
@@ -627,9 +440,8 @@ class FleetManagementSystem(Node):
             and task_id != "-"
             and status in self.FINISHED_STATUSES
         ):
-            if task_id in self.active_tasks:
-                finished_task = self.active_tasks.pop(task_id)
-
+            finished_task = self.task_manager.complete_task(task_id)
+            if finished_task is not None:
                 self.get_logger().info(
                     f"[TASK FINISHED] "
                     f"{finished_task.task_id} removed from active registry"
@@ -674,7 +486,7 @@ class FleetManagementSystem(Node):
         # 대기 Task 없음
         # =================================================
 
-        if not self.task_queue:
+        if not self.task_manager.waiting_count:
             response.has_task = False
             response.message = "No waiting task."
 
@@ -694,6 +506,11 @@ class FleetManagementSystem(Node):
             )
             return response
 
+        if not self.node_map_graph.nodes:
+            response.has_task = False
+            response.message = "NodeMap is not ready."
+            return response
+
         # =================================================
         # 현재 AMR 상태 생성
         # =================================================
@@ -708,43 +525,23 @@ class FleetManagementSystem(Node):
             current_task_id=request.current_task_id,
         )
 
-        # =================================================
-        # 현재 waiting queue 전체를 cuOpt에 전달
-        # =================================================
-
-        tasks = list(self.task_queue)
-        self.is_optimizing = True
-
         self.get_logger().info(
-            f"[CUOPT] Sending {len(tasks)} tasks for {request.amr_id}"
+            f"[CUOPT] Sending {self.task_manager.waiting_count} "
+            f"tasks for {request.amr_id}"
         )
 
+        self.is_optimizing = True
         try:
-
-            # cuOpt/cudf는 실제 최적화 요청이 들어올 때만 필요하다.
-            # 이를 지연 import해 NodeMap 통신 확인은 cuOpt 환경 없이도 가능하다.
             from fms.cuopt_solver import CuOptSolver
 
-            optimization_request = OptimizationRequest(
-                tasks=tuple(tasks),
-                amr_state=amr_state,
-            )
-
+            tasks = self.task_manager.get_waiting_tasks()
+            optimization_request = OptimizationRequest(tasks, amr_state)
             self.latest_plan = CuOptSolver(
-                optimization_request
+                optimization_request,
+                self.node_map_graph,
             ).solve()
-
-            # =============================================
-            # cuOpt 결과 확인
-            # =============================================
-
-            if (
-                not self.latest_plan.success
-                or not self.latest_plan.ordered_tasks
-            ):
-                response.has_task = False
-                response.message = self.latest_plan.message
-                return response
+            if not self.latest_plan.ordered_tasks:
+                raise RuntimeError("cuOpt returned no Task.")
 
             self.get_logger().info(
                 "=== Optimized Task Order ==="
@@ -753,30 +550,23 @@ class FleetManagementSystem(Node):
             for ordered_task in self.latest_plan.ordered_tasks:
                 self.get_logger().info(
                     f"{ordered_task.sequence:02d}. "
-                    f"{ordered_task.task_id} -> "
-                    f"{ordered_task.delivery_cell}"
+                    f"{ordered_task.task_id}: "
+                    f"{ordered_task.route.start_node_id} -> "
+                    f"{ordered_task.route.goal_node_id} "
+                    f"(cost={ordered_task.route.total_cost:.3f})"
                 )
 
-            # =============================================
-            # 첫 번째 Task 선택
-            # =============================================
-
-            selected_order = self.latest_plan.ordered_tasks[0]
-
-            selected_task = next(
-                task
-                for task in tasks
-                if task.task_id == selected_order.task_id
+            selected_plan = self.latest_plan.ordered_tasks[0]
+            selected_id = selected_plan.task_id
+            selected_task = next(task for task in tasks if task.task_id == selected_id)
+            selected_task = self.task_manager.assign_task(
+                selected_id,
+                selected_plan.route,
+                self.node_map_graph.revision,
             )
-
-            # =============================================
-            # logical location -> physical coordinate
-            # =============================================
-
-            pickup_location = PARTS_SUPERMARKET
-            delivery_location = LOCATION_BY_ID[
-                selected_task.delivery_cell
-            ]
+            start = selected_task.start
+            goal = selected_task.goal
+            task_route = selected_task.route
 
             # =============================================
             # AMR Response
@@ -790,32 +580,26 @@ class FleetManagementSystem(Node):
             )
 
             # Pickup
-            response.pickup_id = pickup_location.location_id
-            response.pickup_x = float(pickup_location.x)
-            response.pickup_y = float(pickup_location.y)
+            response.pickup_id = start.name
+            response.pickup_x = float(start.x)
+            response.pickup_y = float(start.y)
 
             # Delivery
-            response.delivery_id = delivery_location.location_id
-            response.delivery_x = float(delivery_location.x)
-            response.delivery_y = float(delivery_location.y)
+            response.delivery_id = goal.name
+            response.delivery_x = float(goal.x)
+            response.delivery_y = float(goal.y)
+
+            response.node_map_revision = task_route.node_map_revision
+            response.route_node_ids = list(task_route.node_ids)
+            response.route_x = [point[0] for point in task_route.points]
+            response.route_y = [point[1] for point in task_route.points]
+            response.route_z = [point[2] for point in task_route.points]
+            response.route_total_cost = task_route.total_cost
 
             response.message = (
                 f"Assigned {selected_task.task_id} "
                 f"to {request.amr_id}"
             )
-
-            # =============================================
-            # Task 상태 변경
-            # =============================================
-
-            selected_task.status = "ASSIGNED"
-
-            # =============================================
-            # waiting queue -> active_tasks 이동
-            # =============================================
-
-            self.task_queue.remove(selected_task)
-            self.active_tasks[selected_task.task_id] = selected_task
 
             # =============================================
             # FMS AMR 상태 갱신
@@ -834,13 +618,22 @@ class FleetManagementSystem(Node):
             )
 
             self.get_logger().info(
-                f"Pickup   : {pickup_location.location_id} "
-                f"({pickup_location.x:.2f}, {pickup_location.y:.2f})"
+                f"Start    : {start.name} "
+                f"({start.x:.2f}, {start.y:.2f}, {start.z:.2f})"
             )
 
             self.get_logger().info(
-                f"Delivery : {delivery_location.location_id} "
-                f"({delivery_location.x:.2f}, {delivery_location.y:.2f})"
+                f"Goal     : {goal.name} "
+                f"({goal.x:.2f}, {goal.y:.2f}, {goal.z:.2f})"
+            )
+
+            self.get_logger().info(
+                f"Route    : {' -> '.join(map(str, task_route.node_ids))}"
+            )
+
+            self.get_logger().info(
+                f"Cost     : {task_route.total_cost:.3f} "
+                f"(revision={task_route.node_map_revision})"
             )
 
             self.log_queue_summary()
@@ -859,7 +652,6 @@ class FleetManagementSystem(Node):
 
         finally:
             self.is_optimizing = False
-
 
 def main(args: Sequence[str] | None = None) -> None:
 

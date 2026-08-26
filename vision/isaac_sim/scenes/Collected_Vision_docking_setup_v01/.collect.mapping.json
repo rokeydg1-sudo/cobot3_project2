@@ -1,0 +1,143 @@
+{
+    "version": "1.0",
+    "file_records": [
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Dolly/Materials/Textures/fof_map_shelf_cart_a_base_d.png",
+            "source_hash": "4fd909cdf31e1579b691c88c84b7aa36a765271d",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Dolly/Materials/Textures/fof_map_shelf_cart_a_base_d.png",
+            "target_hash": "c2cb5b46806f826cf1b744b4dd25ea521a58cb0d"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Dolly/Materials/Textures/fof_map_shelf_cart_a_base_n.png",
+            "source_hash": "1f335534404a141df9c24897176ff6f695907874",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Dolly/Materials/Textures/fof_map_shelf_cart_a_base_n.png",
+            "target_hash": "4262a1c0e560246b141a6c39f8e5fdbdc0b3046f"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Dolly/Materials/Textures/fof_map_shelf_cart_a_base_roughness.png",
+            "source_hash": "cc653c8e1799be61cd3b5385ec4df8ff54d33219",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/Dolly/Materials/Textures/fof_map_shelf_cart_a_base_roughness.png",
+            "target_hash": "8a9f5585475af3e69264d12d0615c79e6c487c91"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1001.png",
+            "source_hash": "a71b2482df5ea30c14e4e3efd3fb5cc0935592ed",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1001.png",
+            "target_hash": "8eeeee2e38f311e5f4f7a1d808e35d1a9225f1c9"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1002.png",
+            "source_hash": "5359671b3b290053b50c695530742a3c115ac65b",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1002.png",
+            "target_hash": "a8bcabc183f0407ecea738b61ad986445380b4f5"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1003.png",
+            "source_hash": "788c6bd2bc4a7471e215f1d4804d506c9b45ac76",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1003.png",
+            "target_hash": "c9bb4df7c44a850f9e30ce487ab5d1a064488b10"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1002.png",
+            "source_hash": "49d188a780cce63fa4e333103459296c1f917c61",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1002.png",
+            "target_hash": "a51334f8e2ab732ecdbdf8ca345a56bcf473f69e"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1004.png",
+            "source_hash": "83b1f794b49a49fcbc6354626d9f9363259fdf6c",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1004.png",
+            "target_hash": "fbfb20fd3d47c35248180ef3f1f0a467453eb804"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1002.png",
+            "source_hash": "5fe5f89ff932473fbc34c892cb8327d662d441f7",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1002.png",
+            "target_hash": "c5a2f44f8954e97f03c7272f3b03a3df791126d4"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1003.png",
+            "source_hash": "ce242b7c2da3960b59fcda4972c96654149980ab",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1003.png",
+            "target_hash": "969b01f43edaf173e4fcf9c8f591bfc36838c10a"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1003.png",
+            "source_hash": "2464ac495ad72f6bd4f27bc88ad0586265e130bc",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1003.png",
+            "target_hash": "4882a67c3242b9d4a9b8f04305c9bd11d138ea72"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1003.png",
+            "source_hash": "32bff48b28adf8d172078dfcac035876be6a9012",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1003.png",
+            "target_hash": "542f91d254b207505f2c8bfb1674de12f0e5be2d"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1001.png",
+            "source_hash": "9366621d79f8bd262ee9ec63cce66d60380b30fa",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1001.png",
+            "target_hash": "fd03908999bebcbb2a9a1965678cf4178abf6278"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1004.png",
+            "source_hash": "df2d29873bc74bc8267a8acd7005c9169f0cb8b4",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.1004.png",
+            "target_hash": "f3e9f9db97104877596861e7aa5c9dc377eeeade"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1001.png",
+            "source_hash": "0701013a767bde3c484995a5967cb2ab73b53fb7",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.1001.png",
+            "target_hash": "d428fcb39fae44e59bcf2cf2a997f1567a8d6893"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1004.png",
+            "source_hash": "c23ea7c663cf2ad47aada2542a8238f94e7091d3",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.1004.png",
+            "target_hash": "373edef6c5db1ccf5cdaf7fe320fc73adc53c79e"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1004.png",
+            "source_hash": "9928d7f7157c37b68114882f99605263f32c9c3b",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1004.png",
+            "target_hash": "f98c554fceaaed8c3f08cd88bd907e8079e803b0"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.<UDIM>.png",
+            "source_hash": "91056ee6bd97bc8d75271dce2c8dd4bbf5487ca0",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_albedo.<UDIM>.png",
+            "target_hash": "c2b11f4c842e47deb6d9e28b990bf3c5514340ec"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.<UDIM>.png",
+            "source_hash": "91056ee6bd97bc8d75271dce2c8dd4bbf5487ca0",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_normal.<UDIM>.png",
+            "target_hash": "c2b11f4c842e47deb6d9e28b990bf3c5514340ec"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.<UDIM>.png",
+            "source_hash": "91056ee6bd97bc8d75271dce2c8dd4bbf5487ca0",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_orm.<UDIM>.png",
+            "target_hash": "c2b11f4c842e47deb6d9e28b990bf3c5514340ec"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1001.png",
+            "source_hash": "e329f78d97ca8932b101ca63e847fa19dbf70025",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1001.png",
+            "target_hash": "36ac646b927a279c83808171edb9dc546978076a"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1002.png",
+            "source_hash": "2464ac495ad72f6bd4f27bc88ad0586265e130bc",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.1002.png",
+            "target_hash": "3708f1490e8b116d229f3c80b73e618ea068dd83"
+        },
+        {
+            "source_url": "/home/rokey/Downloads/Collected_Vision_docking_setup_v02_marker/omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.<UDIM>.png",
+            "source_hash": "91056ee6bd97bc8d75271dce2c8dd4bbf5487ca0",
+            "target_url": "./omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Idealworks/iwhub/HighResProps/Textures/STL_Robot_emissive.<UDIM>.png",
+            "target_hash": "c2b11f4c842e47deb6d9e28b990bf3c5514340ec"
+        }
+    ]
+}

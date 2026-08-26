@@ -1,0 +1,12 @@
+# docking node를 실행하기 위한 최소 실행용 requirements 입니다.
+# Minimal pip requirements for Dolly Docking runtime
+# ROS 2 packages (rclpy, cv_bridge, sensor_msgs, geometry_msgs)
+# are provided by ROS 2 Jazzy and should NOT be installed from pip.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+numpy==1.26.4
+opencv-python==4.11.0.86
+torch==2.11.0+cu128
+torchvision==0.26.0
+ultralytics==8.4.129

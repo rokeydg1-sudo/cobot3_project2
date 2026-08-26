@@ -15,7 +15,7 @@
 저장소 루트에서 실행한다.
 
 ```bash
-cd ~/cobot3_project
+cd "$(git rev-parse --show-toplevel)"
 
 python3 -m venv .venv
 source .venv/bin/activate

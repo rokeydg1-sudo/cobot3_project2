@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'amr_node = amr_control.amr_node:main',
+            'nav2_goal_test = amr_control.nav2_goal_test:main',
             
         ],
     },

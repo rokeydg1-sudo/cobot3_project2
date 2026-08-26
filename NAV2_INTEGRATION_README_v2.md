@@ -654,7 +654,7 @@ ROS 2 Jazzy / Nav2 패키지가 제공한다.
 ```bash
 ros2 launch nav2_bringup navigation_launch.py \
 use_sim_time:=true \
-params_file:=/home/skywalker/cobot3_project/config/nav2_params.yaml
+params_file:=$(git rev-parse --show-toplevel)/config/nav2_params.yaml
 ```
 
 여기서 `navigation_launch.py`는 보통 다음 설치 경로에 존재한다.
@@ -810,11 +810,11 @@ Isaac Sim
 ## Terminal 1 — FMS + cuOpt
 
 ```bash
-source ~/cuopt_env/bin/activate
+source "${CUOPT_ENV:-$HOME/cuopt_env}/bin/activate"
 source /opt/ros/jazzy/setup.bash
-source ~/cobot3_project/ros2_ws/install/setup.bash
+source "$(git rev-parse --show-toplevel)/ros2_ws/install/setup.bash"
 
-cd ~/cobot3_project
+cd "$(git rev-parse --show-toplevel)"
 python -m fms.scenario0_fms
 ```
 
@@ -822,11 +822,11 @@ python -m fms.scenario0_fms
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ~/cobot3_project/ros2_ws/install/setup.bash
+source "$(git rev-parse --show-toplevel)/ros2_ws/install/setup.bash"
 
-cd ~/cobot3_project
+cd "$(git rev-parse --show-toplevel)"
 
-~/isaacsim/python.sh \
+"${ISAAC_SIM_DIR:-$HOME/isaacsim}/python.sh" \
 simulation/isaac_sim/standalone_amr_world.py
 ```
 
@@ -834,12 +834,12 @@ simulation/isaac_sim/standalone_amr_world.py
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ~/cobot3_project/ros2_ws/install/setup.bash
+source "$(git rev-parse --show-toplevel)/ros2_ws/install/setup.bash"
 
 ros2 run nav2_map_server map_server \
 --ros-args \
 -p use_sim_time:=true \
--p yaml_filename:=/home/skywalker/cobot3_project/ros2_ws/src/navigation/maps/factory_map.yaml
+-p yaml_filename:=$(git rev-parse --show-toplevel)/ros2_ws/src/navigation/maps/factory_map.yaml
 ```
 
 Map Server는 Lifecycle Node이므로 현재 실행 환경에서는
@@ -866,11 +866,11 @@ yaw = 0
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ~/cobot3_project/ros2_ws/install/setup.bash
+source "$(git rev-parse --show-toplevel)/ros2_ws/install/setup.bash"
 
 ros2 launch nav2_bringup navigation_launch.py \
 use_sim_time:=true \
-params_file:=/home/skywalker/cobot3_project/config/nav2_params.yaml
+params_file:=$(git rev-parse --show-toplevel)/config/nav2_params.yaml
 ```
 
 ## Terminal 6 — Area Detection

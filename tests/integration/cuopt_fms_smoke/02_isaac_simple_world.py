@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Isaac Sim standalone side of the minimal integration test.
 
-Run this with Isaac Sim's Python wrapper (for example `~/isaacsim/python.sh`).
+Run this with Isaac Sim's Python wrapper (for example
+`${ISAAC_SIM_DIR:-$HOME/isaacsim}/python.sh`).
 It creates a ground plane, four station markers, and one simple dynamic cuboid AMR.
 The AMR receives `/fms/goal` and publishes `/amr/pose` + `/amr/status`.
 """

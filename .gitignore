@@ -41,3 +41,22 @@ Thumbs.db
 
 # Integration smoke test generated files
 /tests/integration/cuopt_fms_smoke/cuopt_route.json
+
+# Large Isaac Sim collected assets
+simulation/isaac_sim/AF/
+simulation/isaac_sim/AF2/
+simulation/isaac_sim/Collected/
+simulation/isaac_sim/Collected.tar.gz
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local backup files
+*.backup
+
+# Navigation map source assets
+ros2_ws/src/navigation/maps/factory/Usd_Explorer/
+ros2_ws/src/navigation/maps/factory/PACKAGE-LICENSES/
+ros2_ws/src/navigation/maps/factory/PACKAGE-INFO.yaml

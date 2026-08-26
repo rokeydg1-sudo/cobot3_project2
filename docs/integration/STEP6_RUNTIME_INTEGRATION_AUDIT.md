@@ -1,5 +1,11 @@
 # Step 6 Runtime Integration Audit
 
+> Historical audit note (2026-08-27): 이 문서는 변경 전 `NavigateToPose` 기반
+> runtime 상태를 보존한다. 현재 구현된 two-route `NavigateThroughPoses`,
+> `LiftDolly`, odom reverse와 GPU-free 검증 결과는
+> `SCENARIO0_RUNTIME_FLOW.md`, `GPU_FREE_DEVELOPMENT_STATUS.md`,
+> `STEP6_BLOCKER_RESOLUTION.md`를 기준으로 한다.
+
 ## 1. Executive Summary
 
 ### Overall verdict: BLOCKER

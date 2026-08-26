@@ -61,9 +61,9 @@ def generate_launch_description():
         ),
 
         # =================================================
-        # NavigateToPose Action Server
+        # NavigateToPose / NavigateThroughPoses Action Server
         #
-        # /navigate_to_pose 를 제공한다.
+        # BT navigator parameter에 등록된 두 Action을 제공한다.
         # =================================================
         Node(
             package="nav2_bt_navigator",

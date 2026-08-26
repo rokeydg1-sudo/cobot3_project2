@@ -26,7 +26,16 @@ float64 delivery_y
 # 이 경로를 계획할 때 사용한 NodeMap 버전
 uint64 node_map_revision
 
-# 시작 Node에서 도착 Node까지 통과할 Node의 순서와 XYZ 좌표
+# 현재/recovery Node에서 작업 시작(경유지) Node까지의 approach route.
+# 모든 배열은 길이가 같으며, 같은 index의 값이 하나의 Node를 나타낸다.
+int32[] approach_route_node_ids
+float64[] approach_route_x
+float64[] approach_route_y
+float64[] approach_route_z
+float64 approach_route_total_cost
+
+# 작업 시작(경유지) Node에서 작업 도착 Node까지의 delivery route.
+# 기존 route_* 필드는 backward compatibility를 위해 이름을 유지한다.
 # 모든 배열은 길이가 같으며, 같은 index의 값이 하나의 Node를 나타낸다.
 # route_node_ids[i] <-> route_x[i], route_y[i], route_z[i]
 int32[] route_node_ids

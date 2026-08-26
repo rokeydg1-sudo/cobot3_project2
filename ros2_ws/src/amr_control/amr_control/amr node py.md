@@ -1,185 +1,64 @@
-3.2 amr_node.py
+# `amr_node.py`
 
-기존 역할
+## 역할
 
-기존 AMR 제어에서는 목적지 좌표를 직접 /amr/goal로 전달하고,
-/amr/odom의 현재 위치와 목표 위치 사이의 거리를 직접 계산하여 도착 여부를 판단했다.
-
-현재 역할
-
-AMR Node는 이제 직접 주행 경로를 계산하지 않는다.
-
-FMS
- ↓
-RequestTask Service
- ↓
-AMR Node
- ↓
-NavigateToPose
- ↓
-Nav2
-
-주요 변경
-
-1. FMS Pull 방식 적용
-
-AMR이 IDLE 상태일 때 일정 주기로 FMS에 다음 Task를 요청한다.
-
-Service:
-
-/fms/request_task
-
-AMR이 전달하는 상태:
-
-amr_id
-
-현재 state
-
-현재 task
-
-현재 x/y 위치
-
-load state
-
-2. Nav2 ActionClient 적용
-
-기존:
-
-/amr/goal Publish
-
-현재:
-
-NavigateToPose Action
-
-실제 Action:
-
-/navigate_to_pose
-
-Goal frame:
-
-map
-
-3. 이동 성공 판정 변경
-
-기존:
-
-/amr/odom
- ↓
-목표와 거리 계산
- ↓
-threshold 이하이면 성공
-
-현재:
-
-NavigateToPose
- ↓
-Feedback
- ↓
-Action Result
- ↓
-SUCCEEDED / ABORTED / CANCELED
-
-즉 이동 성공 여부를 AMR Node가 임의로 계산하지 않고 Nav2의 결과를 사용한다.
-
-4. AMR 상태 Event 추가
-
-Topic:
-
-/amr/status
-
-대표 상태:
-
-READY
-TASK_ASSIGNED
-MOVING_TO_PICKUP
-ARRIVED_PICKUP
-LOADING
-LOAD_COMPLETE
-MOVING_TO_DELIVERY
-ARRIVED_DELIVERY
-DELIVERY_COMPLETE
-MISSION_COMPLETE
-IDLE
-TASK_FAILED
-
-FMS는 이 이벤트를 이용해 AMR 상태와 Active Task를 관리한다.
-
-5. MultiThreadedExecutor 적용
-
-동시에 처리해야 하는 통신이 증가하여
-다음 Callback을 분리했다.
-
-/amr/odom
-
-FMS Service
-
-Task Request Timer
-
-Nav2 Action
-
-6. Vision Dolly Docking 통합
-
-AMR Node는 Pickup 좌표를 현재 단계의 Pre-Docking pose로 취급한다. 별도의
-Pre-Docking 좌표 계산은 하지 않는다. Pickup `NavigateToPose`가
-`SUCCEEDED`로 끝난 후 `/dock_dolly`에 `DockDolly` Goal을 보내며, Goal에는
-현재 `amr_id`와 `task_id`가 포함된다.
+AMR이 IDLE일 때 실제 odom x/y로 FMS Task를 pull하고, FMS가 반환한 approach/delivery Node route를 순차 수행한다. Route 계산과 Task ordering은 하지 않는다.
 
 ```text
-MOVING_TO_PICKUP
-  -> NavigateToPose SUCCEEDED
-  -> PRE_DOCKING
-  -> DockDolly Goal accepted
-  -> DOCKING
-  -> DOCKING_COMPLETE
-  -> ARRIVED_PICKUP
-  -> LOADING
+FMS RequestTask
+-> approach VisualizeRoute
+-> NavigateThroughPoses
+-> DockDolly
+-> LiftDolly UP
+-> direct cmd_vel odom return
+-> delivery VisualizeRoute
+-> NavigateThroughPoses
+-> LiftDolly DOWN
+-> Mission complete
 ```
 
-Docking Result가 `success=true`이고 Action 상태도 `SUCCEEDED`인 경우에만
-`ARRIVED_PICKUP`과 `LOADING`으로 진행한다. Action Server 미준비, Goal 거절,
-Goal/Result timeout, 예외, canceled/aborted 상태 또는 `success=false`는 모두
-기존 `handle_task_failure()`로 연결되어 `TASK_FAILED`와 `ERROR` 상태가 된다.
+## Route와 Pose
 
-7. Callback group / executor 구조
+`approach_route_*`는 current/recovery Node -> `Task.start`, 기존 `route_*`는 `Task.start` -> `Task.goal`이다. 각 route의 Node/XYZ 배열 길이와 공통 `Task.start`를 검증한다.
 
-AMR Node는 `MultiThreadedExecutor(num_threads=4)`를 사용한다. `/amr/odom`,
-FMS Service, Task 요청 Timer, Action callback은 각각의
-`MutuallyExclusiveCallbackGroup`으로 분리된다. `VisualizeRoute`,
-`NavigateToPose`, `DockDolly`는 순차 Mission이므로 같은 `action_group`을
-사용한다. Task worker thread는 ROS callback을 직접 spin하지 않고
-`threading.Event`로 Action Goal과 Result를 기다린다.
+AMR이 이미 있는 첫 Node를 `NavigateThroughPoses.Goal.poses`에서 제외한다. 중간 Pose는 다음 Edge 방향, 마지막 Pose는 마지막 incoming Edge 방향을 yaw로 사용한다. route가 한 Node면 Action을 호출하지 않고 odom yaw를 유지한다.
 
-8. 전체 Task state/event 흐름
+## Mission 상태
 
 ```text
-IDLE
-  -> TASK_ASSIGNED
-  -> VisualizeRoute
-  -> MOVING_TO_PICKUP
-  -> PRE_DOCKING
-  -> DOCKING
-  -> DOCKING_COMPLETE
-  -> ARRIVED_PICKUP
-  -> LOADING
-  -> LOAD_COMPLETE
-  -> MOVING_TO_DELIVERY
-  -> ARRIVED_DELIVERY
-  -> DELIVERY_COMPLETE
-  -> MISSION_COMPLETE
-  -> IDLE
+IDLE -> TASK_ASSIGNED
+-> MOVING_TO_WAYPOINT -> ARRIVED_WAYPOINT
+-> PRE_DOCKING -> DOCKING -> DOCKING_COMPLETE
+-> LIFTING_UP -> LIFT_UP_COMPLETE
+-> RETURNING_TO_WAYPOINT -> RETURNED_TO_WAYPOINT
+-> MOVING_TO_DELIVERY -> ARRIVED_DELIVERY
+-> LIFTING_DOWN -> LIFT_DOWN_COMPLETE
+-> DELIVERY_COMPLETE -> MISSION_COMPLETE -> IDLE
 ```
 
-9. ROS 통신 계약
+Dock/Lift/Navigation Action은 `MultiThreadedExecutor` callback으로 Goal/Result를 받고 worker thread는 `threading.Event`로 대기한다. ROS callback thread에서 장시간 mission을 block하지 않는다.
 
-| 종류 | 이름 | 타입 | 방향 | 역할 |
-|---|---|---|---|---|
-| Service | `/fms/request_task` | `interfaces/srv/RequestTask` | AMR -> FMS | IDLE AMR의 Pull 방식 Task 요청 |
-| Action | `/visualize_route` | `interfaces/action/VisualizeRoute` | AMR -> Isaac Sim | 계획 경로 시각화 |
-| Action | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | AMR -> Nav2 | Pickup/Delivery 이동 |
-| Action | `/dock_dolly` | `interfaces/action/DockDolly` | AMR -> Vision | Dolly 인식 기반 미세 정렬 및 진입 |
-| Topic | `/amr/odom` | `nav_msgs/msg/Odometry` | Isaac Sim -> AMR | 현재 위치 갱신 및 FMS 요청 좌표 |
-| Topic | `/amr/status` | `std_msgs/msg/String` | AMR -> FMS | Task lifecycle event 발행 |
+## Lift와 reverse
 
-`/dock_dolly` 이름은 `dock_action_name` parameter로 변경할 수 있다. Nav2
-Goal이 종료된 다음에만 DockDolly Goal을 보내므로 Nav2와 Vision이 동시에
-`/cmd_vel`을 제어하지 않는다.
+Dock 성공 뒤에만 `LiftDolly.LIFT_UP`을 호출한다. UP 성공 뒤 `load_state=LOADED`로 바꾸고 Vision/Nav2가 아닌 direct `Twist.linear.x < 0`으로 후진한다. 시작 odom 대비 평면 변위가 `return_distance_m` 이상이면 정지한다. timeout/exception/shutdown을 포함한 모든 reverse 종료에서 zero Twist를 발행한다.
+
+목적지에서는 `LiftDolly.LIFT_DOWN` 성공 뒤 `load_state=EMPTY`, `DELIVERY_COMPLETE`, `MISSION_COMPLETE`, `IDLE` 순으로 전환한다.
+
+## ROS 계약과 parameter
+
+| 종류 | 기본 이름 | 타입/parameter |
+|---|---|---|
+| Service | `/fms/request_task` | `interfaces/srv/RequestTask`, `fms_service_name` |
+| Action | `/visualize_route` | `interfaces/action/VisualizeRoute`, `visualize_route_action_name` |
+| Action | `/navigate_through_poses` | `nav2_msgs/action/NavigateThroughPoses`, `nav2_action_name` |
+| Action | `/dock_dolly` | `interfaces/action/DockDolly`, `dock_action_name` |
+| Action | `/lift_dolly` | `interfaces/action/LiftDolly`, `lift_action_name` |
+| Topic | `/amr/odom` | `nav_msgs/msg/Odometry`, `odom_topic` |
+| Topic | `/cmd_vel` | `geometry_msgs/msg/Twist`, `cmd_vel_topic` |
+| Topic | `/amr/status` | `std_msgs/msg/String` |
+
+reverse parameter 기본값은 `return_distance_m=3.0`, `return_speed_mps=0.20`, `return_timeout_s=30.0`이다.
+
+## 실패 처리
+
+Action server 미준비, reject, timeout, canceled/aborted, `success=false`, invalid route, odom 부재, reverse timeout은 `ERROR/TASK_FAILED`로 끝난다. Dock failure 뒤 Lift/Delivery, Lift Up failure 뒤 reverse/Delivery, reverse timeout 뒤 Delivery는 실행하지 않는다.

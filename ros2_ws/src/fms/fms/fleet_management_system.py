@@ -23,6 +23,7 @@ from fms.TaskManager import (
     OptimizationResult,
     TaskManager,
 )
+from fms.route_contract import populate_response_routes
 
 
 # 시나리오 검증 중에만 True로 사용한다.
@@ -57,6 +58,13 @@ class FleetManagementSystem(Node):
     def __init__(self) -> None:
 
         super().__init__("FleetManagementSystem")
+        self.declare_parameter(
+            "fms_service_name",
+            self.TASK_REQUEST_SERVICE,
+        )
+        self.fms_service_name = str(
+            self.get_parameter("fms_service_name").value
+        )
 
         self.task_manager = TaskManager(self.QUEUE_CAPACITY)
         self.latest_plan: OptimizationResult | None = None
@@ -98,7 +106,7 @@ class FleetManagementSystem(Node):
 
         self.task_request_service = self.create_service(
             RequestTask,
-            self.TASK_REQUEST_SERVICE,
+            self.fms_service_name,
             self.request_task_callback,
         )
 
@@ -130,7 +138,7 @@ class FleetManagementSystem(Node):
         self.get_logger().info("=================================")
         self.get_logger().info("NodeMap-based FMS started")
         self.get_logger().info(
-            f"Task Service   : {self.TASK_REQUEST_SERVICE}"
+            f"Task Service   : {self.fms_service_name}"
         )
         self.get_logger().info(
             f"AMR Status     : {self.AMR_STATUS_TOPIC}"
@@ -567,6 +575,13 @@ class FleetManagementSystem(Node):
             start = selected_task.start
             goal = selected_task.goal
             task_route = selected_task.route
+            if task_route is None:
+                raise RuntimeError("Assigned Task has no delivery route.")
+
+            approach_route = self.node_map_graph.create_route(
+                self.latest_plan.recovery_node_id,
+                start.node_id,
+            )
 
             # =============================================
             # AMR Response
@@ -590,11 +605,13 @@ class FleetManagementSystem(Node):
             response.delivery_y = float(goal.y)
 
             response.node_map_revision = task_route.node_map_revision
-            response.route_node_ids = list(task_route.node_ids)
-            response.route_x = [point[0] for point in task_route.points]
-            response.route_y = [point[1] for point in task_route.points]
-            response.route_z = [point[2] for point in task_route.points]
-            response.route_total_cost = task_route.total_cost
+            approach_fields, delivery_fields = populate_response_routes(
+                response,
+                approach_route,
+                task_route,
+                start.node_id,
+                goal.node_id,
+            )
 
             response.message = (
                 f"Assigned {selected_task.task_id} "
@@ -628,12 +645,16 @@ class FleetManagementSystem(Node):
             )
 
             self.get_logger().info(
-                f"Route    : {' -> '.join(map(str, task_route.node_ids))}"
+                "Approach : "
+                f"{' -> '.join(map(str, approach_fields.node_ids))} "
+                f"(cost={approach_fields.total_cost:.3f})"
             )
 
             self.get_logger().info(
-                f"Cost     : {task_route.total_cost:.3f} "
-                f"(revision={task_route.node_map_revision})"
+                "Delivery : "
+                f"{' -> '.join(map(str, delivery_fields.node_ids))} "
+                f"(cost={delivery_fields.total_cost:.3f}, "
+                f"revision={task_route.node_map_revision})"
             )
 
             self.log_queue_summary()

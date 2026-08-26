@@ -1,130 +1,40 @@
-3.3 scenario0_fms.py
+# `fleet_management_system.py`
 
-이전 역할
+## 역할
 
-이전 FMS는 Assembly Task Queue를 보관하고,
-AMR의 Route 요청이 들어오면 Queue 전체를 cuOpt에 전달해
-최적화 순서를 계산하는 구조였다.
+FMS는 NodeMap, waiting/active Task, AMR 상태와 cuOpt Task ordering을 관리한다. AMR이 `/fms/request_task`로 현재 odom x/y를 보내면 nearest Active recovery Node를 계산하고 waiting Task 중 수행할 Task를 선택한다.
 
-초기 버전에서는 실제 AMR 상태 대신 고정된 초기 상태를 사용했고,
-최적화 결과만 계산/보관하는 성격이 강했다.
+`Task.start`는 경유지, `Task.goal`은 Dolly delivery 목적지라는 기존 의미를 유지한다. `DELIVERY_COMPLETE` 또는 `MISSION_COMPLETE`를 받으면 active registry에서 Task를 제거한다.
 
-현재 역할
+## Scenario 0 two-route 응답
 
-현재 FMS는 단순 최적화 호출기가 아니라
-Task Queue + Task Assignment + AMR State 관리의 중심 Node 역할을 한다.
+cuOpt selected plan의 기존 route는 `Task.start`에서 `Task.goal`까지의 delivery route로 유지한다. FMS는 `latest_plan.recovery_node_id`를 실제 AMR 위치의 nearest Active Node로 재사용하고 기존 `NodeMapGraphManager.create_route()`로 approach route를 추가 생성한다.
 
-주요 변경
+```text
+approach_route_*: recovery Node -> Task.start
+route_*:          Task.start -> Task.goal
+```
 
-1. AMR Pull Service 추가
+`RequestTask` 응답 전 다음 endpoint와 병렬 배열 길이를 검증한다.
 
-/fms/request_task
+```text
+approach[-1] == Task.start
+route[0]      == Task.start
+route[-1]     == Task.goal
+len(node_ids) == len(x) == len(y) == len(z)
+```
 
-AMR이 직접 다음 Task를 요청한다.
+cuOpt production solver와 shortest path 구현은 변경하지 않는다. GPU-free unit test는 작은 `NodeMapGraphManager`와 직접 생성한 `PlannedNodeRoute`로 계약을 검증한다.
 
-2. 실제 AMR 상태를 cuOpt 입력으로 사용
+## Task lifecycle
 
-AMR Node가 전달한:
-
-x
-y
-state
-load_state
-current_task_id
-
-를 이용해 AMRState를 생성한다.
-
-3. Waiting Queue / Active Task 분리
-
-기존에는 Task가 AMR에 할당되면 Queue에서 빠지고 끝나는 구조였다.
-
-현재는 다음처럼 관리한다.
-
+```text
 waiting queue
-    ↓ AMR에 할당
-active_tasks
-    ↓ 작업 완료
-제거
+-> cuOpt selection
+-> TaskManager.assign_task()
+-> active_tasks
+-> DELIVERY_COMPLETE or MISSION_COMPLETE
+-> TaskManager.complete_task()
+```
 
-의미:
-
-task_queue
-= 아직 AMR에 할당되지 않은 작업
-
-active_tasks
-= 이미 AMR에 할당되어 수행 중인 작업
-
-즉 FMS가 단순히 “남아 있는 작업”만 보는 것이 아니라,
-현재 어떤 작업이 이미 실행 중인지까지 추적할 수 있게 변경했다.
-
-4. 중복 task_id 방지
-
-Assembly Node는 부품이 아직 도착하지 않았거나
-FMS 응답을 받지 못한 경우 같은 Task를 다시 보낼 수 있다.
-
-예:
-
-task_id=1
-task_id=1
-task_id=1
-
-이 경우 FMS에서는 다음 두 위치를 모두 확인한다.
-
-1. waiting queue에 같은 task_id가 있는가?
-2. active_tasks에 같은 task_id가 있는가?
-
-둘 중 하나라도 이미 존재하면 새로 등록하지 않는다.
-
-따라서:
-
-Assembly 재전송 허용
-        +
-FMS 중복 방지
-
-두 정책을 함께 적용했다.
-
-5. 완료 Task 정리
-
-AMR Node가 /amr/status로 작업 완료 이벤트를 보낸다.
-
-예:
-
-status=DELIVERY_COMPLETE
-task_id=1
-
-또는:
-
-status=MISSION_COMPLETE
-task_id=1
-
-FMS는 해당 task_id를 active_tasks에서 제거한다.
-
-active_tasks
-    ↓
-task_id=1 제거
-    ↓
-작업 완료 상태 정리
-
-즉 “AMR에 할당된 순간”부터 “완료될 때”까지
-Task Lifecycle을 FMS가 추적하는 구조가 추가되었다.
-
-6. logical location → physical coordinate 변환
-
-FMS가 cuOpt 결과를 실제 위치 좌표로 변환하여 AMR Node에 전달한다.
-
-예:
-
-supermarket → (-7.0, 0.0)
-cell_a      → ( 7.0, 3.5)
-cell_b      → ( 7.0, 0.0)
-cell_c      → ( 7.0,-3.5)
-
-AMR Node는 이 좌표를 그대로 Nav2 Goal에 넣는다.
-
-7. Vision Docking 연결 이후 유지되는 FMS 계약
-
-FMS의 Task schema, cuOpt 최적화, assignment 및 완료 판정은 변경하지 않는다.
-FMS가 전달하는 `pickup_x`와 `pickup_y`는 AMR이 도달할 Pre-Docking pose로
-취급한다. 이후 `/dock_dolly` 실행과 `PRE_DOCKING`, `DOCKING`,
-`DOCKING_COMPLETE` event는 AMR 내부 Mission 단계이며, FMS는 기존과 같이
-`DELIVERY_COMPLETE` 또는 `MISSION_COMPLETE`를 기준으로 Task를 완료 처리한다.
+중복 `task_id`, inactive Node, route endpoint mismatch는 거부한다. NodeMap revision은 두 route가 공유하는 `node_map_revision`으로 응답한다.

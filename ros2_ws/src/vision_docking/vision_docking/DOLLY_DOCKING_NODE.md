@@ -89,7 +89,7 @@ Isaac Sim Python 환경과 합치지 않는다.
 
 ## `/cmd_vel` 제어권
 
-AMR Mission은 Nav2 `NavigateToPose` Result가 종료된 후에만 DockDolly Goal을
+AMR Mission은 approach `NavigateThroughPoses` Result 종료 후에만 DockDolly Goal을
 보낸다. Goal이 active인 동안 Vision이 `/cmd_vel`을 사용하고, 완료·취소·실패
 시 STOP한 뒤 권한을 반납한다. 이번 단계에서는 cmd_vel mux를 사용하지 않으며
 Nav2와 Vision의 순차 실행으로 제어권 중첩을 방지한다.

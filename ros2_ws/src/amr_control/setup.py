@@ -25,7 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'amr_node = amr_control.amr_node:main',
-            
+            'lift_dolly_server = amr_control.lift_dolly_server:main',
         ],
     },
 )

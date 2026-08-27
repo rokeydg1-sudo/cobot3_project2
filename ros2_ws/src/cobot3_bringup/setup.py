@@ -20,8 +20,18 @@ setup(
             os.path.join('share', package_name, 'launch'),
             glob('launch/*.launch.py'),
         ),
+        (
+            os.path.join('share', package_name, 'maps'),
+            glob('maps/*'),
+        ),
     ],
     install_requires=['setuptools'],
+    entry_points={
+        'console_scripts': [
+            'scene_endpoint_adapter = '
+            'cobot3_bringup.scene_endpoint_adapter:main',
+        ],
+    },
     zip_safe=True,
     maintainer='rokey',
     maintainer_email='rokeydg1@gmail.com',

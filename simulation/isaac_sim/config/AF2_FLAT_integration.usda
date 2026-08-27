@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = "Runtime-only composition layer for single-AMR Scenario 0 integration."
+    subLayers = [
+        @../worlds/Collected_AF2_FLAT/AF2_FLAT.usd@
+    ]
+)
+
+over "World"
+{
+    over "_23"
+    {
+        over "iw_hub_02"
+        {
+            over "ActionGraph2" (
+                active = false
+            )
+            {
+            }
+
+            over "ROS_Lidar_Graph2" (
+                active = false
+            )
+            {
+            }
+        }
+    }
+}

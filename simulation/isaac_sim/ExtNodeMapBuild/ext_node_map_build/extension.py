@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import TYPE_CHECKING
+
 import carb
 import omni.ext
 import omni.kit.app
@@ -9,14 +12,17 @@ import omni.ui as ui
 import omni.usd
 import rclpy
 
-from interfaces.action import VisualizeRoute
-from interfaces.msg import NodeMapChanged
-from interfaces.srv import GetNodeMap
 from omni.kit.viewport.utility import get_active_viewport_window
 from omni.ui import color as cl
 from omni.ui import scene as sc
 from pxr import Gf, Usd, UsdGeom
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+
+if TYPE_CHECKING:
+    from interfaces.action import VisualizeRoute
+    from interfaces.srv import GetNodeMap
+    from rclpy.action import CancelResponse, GoalResponse
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +43,10 @@ EDGE_ROOT = "/World/WaypointGraph/Edges"
 SERVICE_NAME = "/get_node_map"
 MAP_CHANGED_TOPIC = "/node_map_changed"
 VISUALIZE_ROUTE_ACTION = "/visualize_route"
+NODE_MAP_BRIDGE_TOPIC = "/cobot3/runtime/node_map"
+ROUTE_REQUEST_BRIDGE_TOPIC = "/cobot3/runtime/visualize_route/request"
+ROUTE_RESPONSE_BRIDGE_TOPIC = "/cobot3/runtime/visualize_route/response"
+EXTENSION_RUNTIME_READY = False
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +64,8 @@ class ExtNodeMapBuild(omni.ext.IExt):
     """NodeMap 제공 + AMR Step Planned Path 시각화 Extension."""
 
     def on_startup(self, ext_id: str) -> None:
+        global EXTENSION_RUNTIME_READY
+        EXTENSION_RUNTIME_READY = False
         self._ext_id = ext_id
 
         # Runtime NodeMap
@@ -76,6 +88,9 @@ class ExtNodeMapBuild(omni.ext.IExt):
         self._service = None
         self._map_changed_publisher = None
         self._visualize_route_action_server = None
+        self._node_map_bridge_publisher = None
+        self._route_request_subscription = None
+        self._route_response_publisher = None
         self._update_subscription = None
         self._stage_subscription = None
         self._owns_rclpy = False
@@ -91,6 +106,7 @@ class ExtNodeMapBuild(omni.ext.IExt):
 
         self._setup_ros()
         self._setup_stage_events()
+        EXTENSION_RUNTIME_READY = True
 
     # ------------------------------------------------------------------
     # ROS 2 setup
@@ -103,29 +119,29 @@ class ExtNodeMapBuild(omni.ext.IExt):
 
         self._ros_node = rclpy.create_node("ext_node_map_build")
 
-        # 기존 NodeMap Service
-        self._service = self._ros_node.create_service(
-            GetNodeMap,
-            SERVICE_NAME,
-            self._handle_get_node_map,
+        # Isaac 5.1 bundles an older Fast DDS/Fast-CDR ABI than the host's
+        # current Jazzy installation. Keep Stage ownership here while using
+        # standard String messages across the private adapter boundary.
+        bridge_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-
-        # 기존 NodeMap 변경 알림
-        self._map_changed_publisher = self._ros_node.create_publisher(
-            NodeMapChanged,
-            MAP_CHANGED_TOPIC,
+        self._node_map_bridge_publisher = self._ros_node.create_publisher(
+            String,
+            NODE_MAP_BRIDGE_TOPIC,
+            bridge_qos,
+        )
+        self._route_request_subscription = self._ros_node.create_subscription(
+            String,
+            ROUTE_REQUEST_BRIDGE_TOPIC,
+            self._handle_route_bridge_request,
             10,
         )
-
-        # AMR -> Isaac Sim
-        # 각 Step 주행 직전에 현재 Step의 Planned Path를 전달한다.
-        self._visualize_route_action_server = ActionServer(
-            self._ros_node,
-            VisualizeRoute,
-            VISUALIZE_ROUTE_ACTION,
-            execute_callback=self._execute_visualize_route,
-            goal_callback=self._visualize_route_goal_callback,
-            cancel_callback=self._visualize_route_cancel_callback,
+        self._route_response_publisher = self._ros_node.create_publisher(
+            String,
+            ROUTE_RESPONSE_BRIDGE_TOPIC,
+            10,
         )
 
         # Isaac Sim main update loop에서 ROS callback 처리
@@ -141,10 +157,11 @@ class ExtNodeMapBuild(omni.ext.IExt):
         )
 
         carb.log_info(
-            f"[ExtNodeMapBuild] Service ready: {SERVICE_NAME}"
+            f"[ExtNodeMapBuild] NodeMap bridge ready: {NODE_MAP_BRIDGE_TOPIC}"
         )
         carb.log_info(
-            f"[ExtNodeMapBuild] Action ready: {VISUALIZE_ROUTE_ACTION}"
+            "[ExtNodeMapBuild] Route visualization bridge ready: "
+            f"{ROUTE_REQUEST_BRIDGE_TOPIC}"
         )
 
     def _on_update(self, _event) -> None:
@@ -182,34 +199,84 @@ class ExtNodeMapBuild(omni.ext.IExt):
 
         self._revision += 1
         self._publish_node_map_changed()
+        self._publish_runtime_node_map()
 
     # ------------------------------------------------------------------
     # Existing NodeMap ROS interfaces
     # ------------------------------------------------------------------
 
     def _publish_node_map_changed(self) -> None:
-        if self._map_changed_publisher is None:
-            return
+        """Compatibility no-op; the system adapter publishes the public event."""
 
+    def _publish_runtime_node_map(self) -> None:
+        if self._node_map_bridge_publisher is None or not self._nodes:
+            return
         stage = omni.usd.get_context().get_stage()
         root_layer = stage.GetRootLayer() if stage is not None else None
-
-        message = NodeMapChanged()
-        message.revision = self._revision
-        message.stage_identifier = (
-            root_layer.identifier if root_layer is not None else ""
-        )
-        message.node_count = len(self._nodes)
-        message.edge_count = len(self._edges)
-
-        self._map_changed_publisher.publish(message)
-
+        payload = {
+            "revision": self._revision,
+            "stage_identifier": (
+                root_layer.identifier if root_layer is not None else ""
+            ),
+            "nodes": [
+                {"id": node_id, **self._nodes[node_id]}
+                for node_id in sorted(self._nodes)
+            ],
+            "edges": self._edges,
+        }
+        message = String()
+        message.data = json.dumps(payload, separators=(",", ":"))
+        self._node_map_bridge_publisher.publish(message)
         carb.log_info(
-            f"[ExtNodeMapBuild] NodeMap changed: "
-            f"revision={self._revision}, "
-            f"Nodes={message.node_count}, "
-            f"Edges={message.edge_count}"
+            f"[ExtNodeMapBuild] NodeMap bridge published: "
+            f"revision={self._revision}, Nodes={len(self._nodes)}, "
+            f"Edges={len(self._edges)}"
         )
+
+    def _handle_route_bridge_request(self, message: String) -> None:
+        response = {"request_id": "", "success": False, "message": ""}
+        try:
+            request = json.loads(message.data)
+            response["request_id"] = str(request.get("request_id", ""))
+            route = [int(node_id) for node_id in request.get("node_ids", [])]
+            error = self._validate_visualize_request(
+                int(request.get("node_map_revision", -1)),
+                route,
+            )
+            if error is not None:
+                raise ValueError(error)
+
+            self._reset_path_visualization()
+            self._visualized_route = route
+            for node_id in route:
+                if not self._set_prim_color(
+                    self._node_prim_lookup[node_id], PLANNED_COLOR
+                ):
+                    raise RuntimeError(f"Failed to highlight Node {node_id}")
+            for start, end in zip(route, route[1:]):
+                if not self._set_prim_color(
+                    self._edge_prim_lookup[(start, end)], PLANNED_COLOR
+                ):
+                    raise RuntimeError(
+                        f"Failed to highlight Edge {start} -> {end}"
+                    )
+            label_warning = ""
+            if SHOW_ROUTE_ORDER_LABELS and not self._draw_route_order_labels(route):
+                label_warning = " Route order labels were unavailable."
+            response["success"] = True
+            response["message"] = (
+                f"Visualized AMR={request.get('amr_id', '')}, "
+                f"Task={request.get('task_id', '')}, Nodes={route}."
+                f"{label_warning}"
+            )
+        except Exception as exc:
+            self._reset_path_visualization()
+            response["message"] = f"Visualization failed: {exc}"
+            carb.log_error(f"[ExtNodeMapBuild] {response['message']}")
+
+        bridge_response = String()
+        bridge_response.data = json.dumps(response, separators=(",", ":"))
+        self._route_response_publisher.publish(bridge_response)
 
     def _handle_get_node_map(
         self,
@@ -973,6 +1040,8 @@ class ExtNodeMapBuild(omni.ext.IExt):
     # ------------------------------------------------------------------
 
     def on_shutdown(self) -> None:
+        global EXTENSION_RUNTIME_READY
+        EXTENSION_RUNTIME_READY = False
         carb.log_info(
             "[ExtNodeMapBuild] Extension stopping"
         )
@@ -1000,11 +1069,26 @@ class ExtNodeMapBuild(omni.ext.IExt):
                 self._ros_node.destroy_publisher(
                     self._map_changed_publisher
                 )
+            if self._node_map_bridge_publisher is not None:
+                self._ros_node.destroy_publisher(
+                    self._node_map_bridge_publisher
+                )
+            if self._route_request_subscription is not None:
+                self._ros_node.destroy_subscription(
+                    self._route_request_subscription
+                )
+            if self._route_response_publisher is not None:
+                self._ros_node.destroy_publisher(
+                    self._route_response_publisher
+                )
 
             self._ros_node.destroy_node()
 
         self._service = None
         self._map_changed_publisher = None
+        self._node_map_bridge_publisher = None
+        self._route_request_subscription = None
+        self._route_response_publisher = None
         self._ros_node = None
 
         if self._owns_rclpy and rclpy.ok():

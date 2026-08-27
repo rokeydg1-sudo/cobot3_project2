@@ -16,6 +16,8 @@ def generate_launch_description():
     common_remaps = [
         ("/tf", "tf"),
         ("/tf_static", "tf_static"),
+        ("cmd_vel", "/amr1/cmd_vel"),
+        ("/cmd_vel", "/amr1/cmd_vel"),
     ]
 
     return LaunchDescription([

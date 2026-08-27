@@ -3,6 +3,7 @@ dolly_docking_node:
     # ROS I/O
     image_topic: /vision/front_camera/image_raw
     cmd_vel_topic: /cmd_vel
+    odom_topic: /amr/odom
 
     # Safe integration default. Override at launch with:
     # publish_cmd_vel:=true
@@ -13,6 +14,15 @@ dolly_docking_node:
     detection_conf: 0.25
     keypoint_conf: 0.35
     pnp_reprojection_error_px: 12.0
+    pnp_min_distance_m: 1.50
+    pnp_max_distance_m: 3.80
+    pnp_max_lateral_m: 1.00
+    pnp_max_abs_yaw_deg: 45.0
+    pnp_max_reprojection_rmse_px: 6.0
+    pnp_stable_frames: 2
+    pnp_max_distance_jump_m: 0.75
+    pnp_max_lateral_jump_m: 0.45
+    pnp_max_yaw_jump_deg: 30.0
 
     # Vision -> straight-entry handoff
     handoff_distance_m: 2.30
@@ -26,19 +36,24 @@ dolly_docking_node:
     k_yaw: 0.9
     k_lateral: 1.2
 
-    max_linear_mps: 0.12
-    min_linear_mps: 0.04
-    max_angular_rps: 0.25
+    max_linear_mps: 0.30
+    min_linear_mps: 0.06
+    max_angular_rps: 0.35
     min_align_angular_rps: 0.08
 
     angular_sign: 1.0
     yaw_sign: -1.0
 
-    # Final straight entry
+    # Final mechanical entry. Predocking 3 m remains a camera-to-Dolly
+    # Vision start condition; completion aligns lift center to Dolly center.
     enable_final_entry: true
-    final_entry_distance_m: 4.60
-    final_entry_speed_mps: 0.18
+    final_entry_distance_m: 4.60  # odometry safety cap
+    final_entry_speed_mps: 0.20
+    camera_to_lift_longitudinal_m: -0.605948765
+    camera_to_lift_lateral_m: 0.000000878
+    camera_to_lift_yaw_deg: 0.0
     image_watchdog_timeout_s: 0.75
+    inference_watchdog_timeout_s: 2.0
 
     # Close-range PnP fallback
     invalid_frames_before_handoff: 3

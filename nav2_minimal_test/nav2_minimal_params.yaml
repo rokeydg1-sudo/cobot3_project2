@@ -2,8 +2,8 @@ bt_navigator:
   ros__parameters:
     use_sim_time: true
     global_frame: map
-    robot_base_frame: base_link
-    odom_topic: /amr/odom
+    robot_base_frame: amr1/base_link
+    odom_topic: /amr1/odom
     bt_loop_duration: 10
     default_server_timeout: 20
     wait_for_service_timeout: 1000
@@ -21,7 +21,7 @@ controller_server:
   ros__parameters:
     use_sim_time: true
     controller_frequency: 20.0
-    odom_topic: /amr/odom
+    odom_topic: /amr1/odom
     enable_stamped_cmd_vel: false
 
     min_x_velocity_threshold: 0.001
@@ -48,7 +48,7 @@ controller_server:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
 
       # ROS 2 Jazzy RPP parameter name
-      desired_linear_vel: 0.25
+      desired_linear_vel: 0.70
 
       lookahead_dist: 0.50
       min_lookahead_dist: 0.30
@@ -80,8 +80,8 @@ local_costmap:
     ros__parameters:
       use_sim_time: true
 
-      global_frame: odom
-      robot_base_frame: base_link
+      global_frame: amr1/odom
+      robot_base_frame: amr1/base_link
 
       update_frequency: 5.0
       publish_frequency: 2.0
@@ -113,7 +113,7 @@ global_costmap:
       use_sim_time: true
 
       global_frame: map
-      robot_base_frame: base_link
+      robot_base_frame: amr1/base_link
 
       update_frequency: 2.0
       publish_frequency: 1.0
@@ -163,9 +163,9 @@ behavior_server:
     global_footprint_topic: global_costmap/published_footprint
 
     cycle_frequency: 10.0
-    local_frame: odom
+    local_frame: amr1/odom
     global_frame: map
-    robot_base_frame: base_link
+    robot_base_frame: amr1/base_link
     transform_tolerance: 0.5
 
     enable_stamped_cmd_vel: false

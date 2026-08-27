@@ -45,3 +45,42 @@
 ## Host-only dependency note
 
 현재 system ROS에는 `nav2_msgs`/`geographic_msgs`가 없었다. source schema를 추측하지 않고 Jazzy Debian package를 `/tmp` overlay로 로드해 interface/build/mock를 검증했다. one-command script도 동일한 non-root fallback을 제공한다. production workstation에는 정상적인 Jazzy Nav2 설치를 권장한다.
+
+## GPU Runtime Update (2026-08-27)
+
+위 `RUNTIME_ONLY_BLOCKER` 목록은 GPU-free checkpoint 시점의 기록이다. 현재 GPU
+workstation에서는 다음 항목이 해소되었다.
+
+- `RUNTIME_BLOCKER_MAIN_SCENE`: RESOLVED. Main USD와 Isaac Sim 5.1.0 launcher 및
+  Python을 실제 확인했다.
+- ROS namespace/TF: RESOLVED for minimal runtime. `/amr1/odom`,
+  `/amr1/cmd_vel`, `/amr1/scan`, `map -> amr1/odom -> amr1/base_link`로 검증했다.
+- actual Nav2: RESOLVED for rolling-costmap test. `NavigateThroughPoses` physical
+  route가 `SUCCEEDED`였다.
+- actual IW Hub lift discovery: RESOLVED. `/World/_23/iw_hub_01/lift_joint`,
+  Prismatic Z, limits `0.0..0.04 m`, positive=UP을 확인했다.
+- actual Vision docking: RESOLVED. first-person camera, YOLO/PnP와 실제
+  `/dock_dolly` result `DOCKING_COMPLETE`를 확인했다.
+- actual cuOpt: RESOLVED. production adapter와 deterministic two-task input을
+  GPU runtime에서 실행했다.
+- Jazzy interfaces: RESOLVED. `nav2_msgs`, `nav2_bringup`, `geographic_msgs`가
+  정식 설치되어 `/tmp` overlay를 사용하지 않았다.
+
+추가 runtime 결과는 다음과 같다.
+
+- `RUNTIME_BLOCKER_DOCKING_LIFT_GEOMETRY`: **RESOLVED without geometry workaround**. Predocking `3 m`는 Camera-to-Dolly Vision start condition이고, final docking은 Lift Center-to-Dolly Lifting Center alignment다. Camera-to-Lift planar extrinsic은 longitudinal `-0.605948765 m`, lateral `+0.000000878 m`, yaw `0 deg`다. Vision final-entry가 이 extrinsic과 odometry를 사용하도록 변경했고 `final_entry_distance_m=4.60`은 safety cap으로 유지했다.
+- runner의 Lift visual/collision offset production default는 `(0, 0)`이다. Main USD와 원본 Lift geometry는 수정하지 않았다. Workaround OFF 상태에서 `DOCKING_COMPLETE`, XY overlap, Lift Up `+0.014925 m`, stable Lift Down을 PASS했다.
+- speed chain: actual wheel geometry `radius=0.08 m`, distance `0.57926 m`를 session-layer differential controller에 반영했다. RPP `desired_linear_vel=0.70`, Vision far/final `0.30/0.20 m/s`, integration reverse `0.35 m/s`를 사용한다. 동일 Nav2 route는 `60.30 -> 28.19 s`, loaded 3 m reverse는 `3.024 m / 18.811 s / zero Twist`로 PASS했다.
+- Vision 전체 docking elapsed는 `56.65 -> 58.04 s`로 개선되지 않았으나 final-entry는 `31.19 -> 30.25 s`였다. 남은 지배 구간은 PnP alignment이며 이번 범위에서 algorithm/gain을 변경하지 않았다.
+- `RUNTIME_BLOCKER_PRODUCTION_MAP_LOCALIZATION`: **PARTIAL/OPEN**. Main Scene
+  `/amr1/scan`으로 0.10 m static map을 생성해 전체 NodeMap bounds를 포함시켰고,
+  `map_server + AMCL`의 단독 `map -> amr1/odom` ownership과 lifecycle은 PASS했다.
+  그러나 static map에 robot-footprint false occupied cell이 남아 production short
+  NavigateThroughPoses planner가 실패한다. recoverable costmap clear로는 static
+  layer가 복원됐으며 unsafe한 global static-layer disable/persistent obstacle delete는
+  적용하지 않았다.
+- `RUNTIME_BLOCKER_FMS_SCENE_ENDPOINTS`: **RESOLVED**. 기존 ExtNodeMapBuild가
+  Stage NodeMap/route visualization owner를 유지하고 system Jazzy adapter가 public
+  custom endpoints를 제공한다. NodeMap 14/16, Route B visualization, actual cuOpt
+  RequestTask가 PASS했다.
+- `RUNTIME_CHECK_DOLLY_UNDER_AMR`: **OPEN/SKIP**. 이번 두 가지 집중 범위 밖이다.

@@ -17,12 +17,24 @@ def generate_launch_description():
     )
 
     publish_cmd_vel = LaunchConfiguration('publish_cmd_vel')
+    cmd_vel_topic = LaunchConfiguration('cmd_vel_topic')
+    odom_topic = LaunchConfiguration('odom_topic')
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'publish_cmd_vel',
             default_value='false',
             description='Publish Twist commands to /cmd_vel.',
+        ),
+        DeclareLaunchArgument(
+            'cmd_vel_topic',
+            default_value='/cmd_vel',
+            description='Twist output topic for the active base controller.',
+        ),
+        DeclareLaunchArgument(
+            'odom_topic',
+            default_value='/amr/odom',
+            description='Odometry used by mechanical final entry.',
         ),
         Node(
             package='vision_docking',
@@ -36,6 +48,8 @@ def generate_launch_description():
                         publish_cmd_vel,
                         value_type=bool,
                     ),
+                    'cmd_vel_topic': cmd_vel_topic,
+                    'odom_topic': odom_topic,
                 },
             ],
         ),

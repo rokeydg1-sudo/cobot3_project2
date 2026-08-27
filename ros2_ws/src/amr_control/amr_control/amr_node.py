@@ -2,6 +2,7 @@
 """Execute the Scenario 0 AMR mission from FMS assignment to delivery."""
 
 from dataclasses import dataclass
+import math
 import threading
 import time
 
@@ -14,9 +15,12 @@ from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
 from std_msgs.msg import String
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from amr_control.mission_utils import (
     navigation_waypoints,
@@ -59,6 +63,8 @@ class AMRNode(Node):
 
         self.pose_lock = threading.Lock()
         self.latest_pose: tuple[float, float, float] | None = None
+        self.latest_pose_frame = ""
+        self._last_task_pose_tf_warn_time = 0.0
         self.task_lock = threading.Lock()
         self._shutdown_requested = threading.Event()
 
@@ -66,6 +72,16 @@ class AMRNode(Node):
         self.service_group = MutuallyExclusiveCallbackGroup()
         self.timer_group = MutuallyExclusiveCallbackGroup()
         self.action_group = MutuallyExclusiveCallbackGroup()
+
+        # FMS expects the AMR current pose in the same map/world frame
+        # used by the NodeMap. Keep raw odometry for motion feedback,
+        # but transform it through TF only when building RequestTask.
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(
+            self.tf_buffer,
+            self,
+            spin_thread=False,
+        )
 
         self.task_client = self.create_client(
             RequestTask,
@@ -143,6 +159,7 @@ class AMRNode(Node):
             "/visualize_route",
         )
         self.declare_parameter("nav_frame", "map")
+        self.declare_parameter("task_pose_tf_timeout_s", 0.20)
         self.declare_parameter("move_timeout_s", 60.0)
         self.declare_parameter("dock_timeout_s", 120.0)
         self.declare_parameter("lift_timeout_s", 30.0)
@@ -173,6 +190,9 @@ class AMRNode(Node):
             self.get_parameter("visualize_route_action_name").value
         )
         self.nav_frame = str(self.get_parameter("nav_frame").value)
+        self.task_pose_tf_timeout_s = float(
+            self.get_parameter("task_pose_tf_timeout_s").value
+        )
         self.move_timeout_s = float(
             self.get_parameter("move_timeout_s").value
         )
@@ -202,6 +222,7 @@ class AMRNode(Node):
         )
 
         positive_parameters = {
+            "task_pose_tf_timeout_s": self.task_pose_tf_timeout_s,
             "move_timeout_s": self.move_timeout_s,
             "dock_timeout_s": self.dock_timeout_s,
             "lift_timeout_s": self.lift_timeout_s,
@@ -236,12 +257,84 @@ class AMRNode(Node):
                 float(position.y),
                 float(yaw),
             )
+            self.latest_pose_frame = str(message.header.frame_id).lstrip("/")
 
     def _current_pose(self) -> tuple[float, float, float] | None:
         with self.pose_lock:
             if self.latest_pose is None:
                 return None
             return tuple(self.latest_pose)
+
+    def _current_task_request_pose(
+        self,
+    ) -> tuple[float, float, float] | None:
+        """Return the latest AMR pose transformed into the Nav2/map frame."""
+        with self.pose_lock:
+            if self.latest_pose is None:
+                return None
+            odom_pose = tuple(self.latest_pose)
+            source_frame = self.latest_pose_frame
+
+        target_frame = self.nav_frame.lstrip("/")
+        source_frame = source_frame.lstrip("/")
+        if not source_frame or not target_frame:
+            self._warn_task_pose_tf(
+                "Cannot request Task: odom/nav frame_id is empty."
+            )
+            return None
+
+        if source_frame == target_frame:
+            return odom_pose
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                target_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=self.task_pose_tf_timeout_s),
+            )
+        except TransformException as error:
+            self._warn_task_pose_tf(
+                "Cannot request Task until TF is available: "
+                f"{source_frame} -> {target_frame}: {error}"
+            )
+            return None
+
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
+        tf_yaw = quaternion_yaw(
+            rotation.x,
+            rotation.y,
+            rotation.z,
+            rotation.w,
+        )
+        cos_yaw = math.cos(tf_yaw)
+        sin_yaw = math.sin(tf_yaw)
+        x_odom, y_odom, yaw_odom = odom_pose
+
+        x_target = (
+            float(translation.x)
+            + cos_yaw * x_odom
+            - sin_yaw * y_odom
+        )
+        y_target = (
+            float(translation.y)
+            + sin_yaw * x_odom
+            + cos_yaw * y_odom
+        )
+        yaw_target = math.atan2(
+            math.sin(tf_yaw + yaw_odom),
+            math.cos(tf_yaw + yaw_odom),
+        )
+        return x_target, y_target, yaw_target
+
+    def _warn_task_pose_tf(self, message: str) -> None:
+        """Throttle TF warnings while AMCL/map->odom is still starting."""
+        now = time.monotonic()
+        if now - self._last_task_pose_tf_warn_time < 2.0:
+            return
+        self._last_task_pose_tf_warn_time = now
+        self.get_logger().warning(message)
 
     def _publish_status(self, status: str) -> None:
         with self.task_lock:
@@ -268,7 +361,7 @@ class AMRNode(Node):
             ):
                 return
 
-        current_pose = self._current_pose()
+        current_pose = self._current_task_request_pose()
         if current_pose is None:
             return
         if not self.task_client.service_is_ready():
@@ -294,6 +387,11 @@ class AMRNode(Node):
         request.x = current_pose[0]
         request.y = current_pose[1]
         request.load_state = request_load_state
+        self.get_logger().info(
+            "[TASK REQUEST] "
+            f"pose_frame={self.nav_frame}, "
+            f"x={request.x:.3f}, y={request.y:.3f}"
+        )
 
         try:
             future = self.task_client.call_async(request)

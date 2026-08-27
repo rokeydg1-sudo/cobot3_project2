@@ -60,3 +60,7 @@ __pycache__/
 ros2_ws/src/navigation/maps/factory/Usd_Explorer/
 ros2_ws/src/navigation/maps/factory/PACKAGE-LICENSES/
 ros2_ws/src/navigation/maps/factory/PACKAGE-INFO.yaml
+
+# Vision / solver virtualenvs (large, machine-specific)
+/.venv_vision/
+/.venvs/

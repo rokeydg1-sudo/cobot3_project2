@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='skywalker',
     maintainer_email='rokeydg1@gmail.com',
-    description='TODO: Package description',
+    description='World-coordinate Dolly transport mission controller for the IW Hub demo',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -24,9 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'amr_node = amr_control.amr_node:main',
-            'nav2_goal_test = amr_control.nav2_goal_test:main',
-            
+            'amr_mission_controller = amr_control.amr_mission_controller:main',
         ],
     },
 )

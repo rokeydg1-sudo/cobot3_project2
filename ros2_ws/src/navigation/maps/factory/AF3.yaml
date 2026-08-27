@@ -1,6 +1,0 @@
-image: AF3.png
-resolution: 0.1
-origin: [-53.35000152587891, -30.550000381469726, 0.0]
-negate: 0
-occupied_thresh: 0.65
-free_thresh: 0.196

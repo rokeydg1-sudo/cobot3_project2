@@ -1,0 +1,46 @@
+==============================================================================
+FACTORY INVENTORY
+==============================================================================
+
+[AMR]
+path=/World/_23/iw_hub_01
+x=-30.360045, y=17.247943, z=0.338165, yaw_deg=0.000000
+
+[JOINTS]
+left_wheel_joint=['/World/_23/iw_hub_01/left_wheel_joint']
+right_wheel_joint=['/World/_23/iw_hub_01/right_wheel_joint']
+lift_joint=['/World/_23/iw_hub_01/lift_joint']
+
+[DOLLIES]
+01. /World/dolly_physics | x=-24.832190, y=22.560954, z=0.005278, yaw_deg=0.000000
+02. /World/dolly_physics_01 | x=-27.835348, y=25.521380, z=0.302153, yaw_deg=90.000002
+03. /World/dolly_physics_02 | x=-24.348740, y=-20.839027, z=0.302153, yaw_deg=0.000000
+04. /World/dolly_physics_03 | x=-27.364198, y=-23.874470, z=0.271783, yaw_deg=90.000002
+05. /World/dolly_physics_04 | x=-5.974600, y=23.477560, z=0.302153, yaw_deg=90.000002
+06. /World/dolly_physics_05 | x=-8.976570, y=20.473740, z=0.302153, yaw_deg=0.000000
+07. /World/dolly_physics_06 | x=-8.938910, y=-22.604786, z=0.298247, yaw_deg=0.000000
+08. /World/dolly_physics_07 | x=-5.905780, y=-25.538490, z=0.298247, yaw_deg=90.000002
+
+[WAYPOINT_NODES]
+Node_0 | id=0 | x=7.905887, y=0.000000, z=0.150000
+Node_1 | id=1 | x=-42.453572, y=0.000000, z=0.150000
+Node_2 | id=2 | x=7.875812, y=20.392728, z=0.150000
+Node_3 | id=3 | x=7.805492, y=-22.221041, z=0.150000
+Node_4 | id=4 | x=-5.977179, y=20.463047, z=0.150000
+Node_5 | id=5 | x=-6.399097, y=6.750696, z=0.150000
+Node_6 | id=6 | x=-5.906859, y=-22.572640, z=0.150000
+Node_7 | id=7 | x=-6.258458, y=-7.946132, z=0.150000
+Node_8 | id=8 | x=-27.495022, y=6.610057, z=0.150000
+Node_9 | id=9 | x=-27.565342, y=-7.805492, z=0.150000
+Node_10 | id=10 | x=-27.846621, y=22.502320, z=0.150000
+Node_11 | id=11 | x=-27.354383, y=-20.814646, z=0.150000
+Node_12 | id=12 | x=-42.191850, y=22.432000, z=0.150000
+Node_13 | id=13 | x=-42.332490, y=-20.884966, z=0.150000
+
+[CAMERA]
+/World/_23/iw_hub_01/chassis/docking_camera_mount/docking_camera
+
+[DISABLED_OLD_GRAPHS]
+/World/_23/iw_hub_01/ActionGraph1
+/World/_23/iw_hub_01/ROS_Lidar_Graph1
+==============================================================================

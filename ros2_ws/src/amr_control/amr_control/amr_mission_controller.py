@@ -97,9 +97,84 @@ class AMRMissionController(Node):
         # the YOLO/PnP node. -1 disables it. Coordinate docking always remains
         # the fallback, so a vision dropout cannot strand the robot.
         self.declare_parameter("vision_dock_mission", -1)
+        # Use the camera on every mission this robot runs, not just one.
+        #
+        # One snapshot per run is not a sample. The detection rate in the run
+        # report was 1/1, which is not evidence of anything; with three
+        # missions on amr1 the same run yields three. Off by default because a
+        # single docking camera exists and only the robot it is mounted on can
+        # use it - a second subscriber would be measuring amr1's view.
+        self.declare_parameter("vision_dock_all_missions", False)
         self.declare_parameter("vision_cmd_topic", "/dock/cmd_vel")
         self.declare_parameter("vision_status_topic", "/dock/status")
         self.declare_parameter("vision_timeout_sec", 1.0)
+
+        # Snapshot docking: stop short of the Dolly, look once, then drive in.
+        self.declare_parameter("snapshot_request_topic", "/dock/snapshot_request")
+        self.declare_parameter("snapshot_result_topic", "/dock/snapshot_result")
+        # Clear distance from the camera to the *near edge* of the Dolly, not
+        # to the dock target. The dock target sits under the middle of the
+        # Dolly, and the asset is about 3.2 m long, so measuring the standoff
+        # from there left the leading edge roughly 1 m from the lens - close
+        # enough to overflow the frame at 60 and at 80 degrees alike, and every
+        # snapshot came back "clipped at frame edge". Measuring from the edge
+        # is also what "stop 3 m before the Dolly" means to a person.
+        self.declare_parameter("snapshot_standoff_m", 3.0)
+        # Camera offset ahead of the chassis origin, matching CAMERA_FORWARD_M
+        # in the bridge. The robot is commanded by its chassis pose but the
+        # picture is taken from here.
+        self.declare_parameter("camera_forward_m", 0.55)
+        # Used only if the inventory predates the bounds being recorded.
+        self.declare_parameter("dolly_half_length_fallback_m", 1.6)
+        # How wide the deck really is across the approach, in metres.
+        #
+        # Measured off the asset by scripts/measure_dolly.py:
+        # FOF_Mesh_Shelf_Cart_B_LOD0 is 1.242 x 0.865 x 0.257 m. An earlier
+        # value of 3.29 came from fitting apparent width against a camera model
+        # that was itself wrong by a factor of 2.6, and was wrong with it.
+        # Set to 0 to fall back to the inventory bounding box.
+        self.declare_parameter("dolly_deck_width_m", 1.242)
+        self.declare_parameter("snapshot_timeout_sec", 6.0)
+        # Hold still after the answer before driving in. The measurement itself
+        # takes about half a second, which is too short to see: on the first
+        # integrated run the robot appeared to drive straight through the
+        # standoff without stopping. This dwell exists so the recognition is
+        # visible - the overlay in rqt sits on the Dolly, unmoving, long enough
+        # to read - and it costs nothing but the wait.
+        self.declare_parameter("snapshot_dwell_sec", 1.4)
+        # Distance over which to taper the approach speed to a target.
+        self.declare_parameter("approach_ramp_m", 0.9)
+        # About one degree. At the 5 m standoff a degree of heading moves
+        # the Dolly 0.09 m across the frame, so this keeps it centred.
+        self.declare_parameter("standoff_yaw_tolerance_rad", 0.022)
+        # Turn shaping. See smooth_angular().
+        # Reverted to the plain proportional term after the first attempt at
+        # shaping the turn made it worse. A minimum speed floor of 0.13 rad/s
+        # cannot settle inside a 0.022 rad tolerance: the robot overshoots, and
+        # the acceleration limit then takes several ticks to reverse, so it
+        # hunts instead of stopping. amr2 was observed rotating away from its
+        # target, -1.873 to -2.029 rad, and amr1 never left SNAPSHOT_ALIGN.
+        #
+        # A floor and a slew limit are the right tools, but they need the floor
+        # to scale down inside the final approach angle rather than being
+        # constant, and that is worth doing carefully rather than under a
+        # deadline. Gain 1.2 with no floor and no acceleration limit is the
+        # behaviour that was measured working all day.
+        self.declare_parameter("angular_gain", 1.2)
+        self.declare_parameter("min_angular_speed", 0.0)
+        self.declare_parameter("max_angular_accel", 1000.0)
+        # Floor on the taper, so the last few centimetres are still covered
+        # rather than crept through.
+        self.declare_parameter("min_approach_speed_fraction", 0.50)
+        # The vision bearing is worth roughly +/-3 degrees at 3 m, which is
+        # 0.16 m of lateral error - the same order as the 0.09-0.12 m the
+        # coordinate dock already achieves on its own. Clamping the correction
+        # keeps a bad reading from making a working dock worse, while still
+        # letting a real offset be corrected.
+        self.declare_parameter("snapshot_max_correction_m", 0.05)
+        # Beyond this the robot is not pointed at the Dolly and the reading is
+        # far more likely to be background than target.
+        self.declare_parameter("snapshot_max_bearing_deg", 12.0)
 
         inventory_path = Path(self.get_parameter("inventory").value)
         with inventory_path.open(encoding="utf-8") as stream:
@@ -151,8 +226,61 @@ class AMRMissionController(Node):
         self.vision_dock_mission = int(
             self.get_parameter("vision_dock_mission").value
         )
+        self.vision_dock_all_missions = bool(
+            self.get_parameter("vision_dock_all_missions").value
+        )
         self.vision_timeout_sec = float(
             self.get_parameter("vision_timeout_sec").value
+        )
+        self.snapshot_standoff_m = float(
+            self.get_parameter("snapshot_standoff_m").value
+        )
+        self.snapshot_timeout_sec = float(
+            self.get_parameter("snapshot_timeout_sec").value
+        )
+        self.snapshot_dwell_sec = float(
+            self.get_parameter("snapshot_dwell_sec").value
+        )
+        self.camera_forward_m = float(
+            self.get_parameter("camera_forward_m").value
+        )
+        self.approach_ramp_m = float(
+            self.get_parameter("approach_ramp_m").value
+        )
+        self.standoff_yaw_tolerance_rad = float(
+            self.get_parameter("standoff_yaw_tolerance_rad").value
+        )
+        self.angular_gain = float(self.get_parameter("angular_gain").value)
+        self.min_angular_speed = float(
+            self.get_parameter("min_angular_speed").value
+        )
+        self.max_angular_accel = float(
+            self.get_parameter("max_angular_accel").value
+        )
+        self.last_angular_cmd = 0.0
+        self.min_approach_speed_fraction = float(
+            self.get_parameter("min_approach_speed_fraction").value
+        )
+        self.dolly_footprint_m = self.dolly_footprint(inventory, (1.24, 0.86))
+        self.dolly_deck_width_m = float(
+            self.get_parameter("dolly_deck_width_m").value
+        )
+        self.get_logger().info(
+            "Dolly footprint from inventory: %.2f x %.2f m; deck width in use: "
+            "%.2f m"
+            % (
+                self.dolly_footprint_m[0],
+                self.dolly_footprint_m[1],
+                self.dolly_deck_width_m
+                if self.dolly_deck_width_m > 0
+                else max(self.dolly_footprint_m),
+            )
+        )
+        self.snapshot_max_correction_m = float(
+            self.get_parameter("snapshot_max_correction_m").value
+        )
+        self.snapshot_max_bearing_deg = float(
+            self.get_parameter("snapshot_max_bearing_deg").value
         )
 
         self.publisher = self.create_publisher(Twist, self.topics["cmd_vel"], 10)
@@ -167,6 +295,15 @@ class AMRMissionController(Node):
         )
         self.dolly_cmd_publisher = self.create_publisher(
             JointState, self.topics["dolly_cmd"], 10
+        )
+        self.snapshot_request_publisher = self.create_publisher(
+            String, str(self.get_parameter("snapshot_request_topic").value), 10
+        )
+        self.snapshot_result_subscription = self.create_subscription(
+            String,
+            str(self.get_parameter("snapshot_result_topic").value),
+            self.snapshot_result_callback,
+            10,
         )
         if self.vision_dock_mission >= 0:
             self.vision_cmd_subscription = self.create_subscription(
@@ -232,6 +369,17 @@ class AMRMissionController(Node):
         self.vision_complete = False
         self.vision_used = False
         self.vision_fallback_logged = False
+
+        # Snapshot docking state. The offset is in factory coordinates and is
+        # added to both dock targets of the current mission, then cleared.
+        self.snapshot_seq = 0
+        self.snapshot_result = None
+        self.snapshot_deadline = None
+        self.snapshot_hold_until = None
+        self.snapshot_pose = None
+        self.snapshot_done = False
+        self.snapshot_resume_state = None
+        self.dock_offset = (0.0, 0.0)
 
         self.get_logger().info(
             "AMR %s | %d mission(s)" % (amr_name, len(self.missions))
@@ -307,6 +455,139 @@ class AMRMissionController(Node):
         if msg.data == "DOCKING_COMPLETE":
             self.vision_complete = True
             self.get_logger().info("VISION reports DOCKING_COMPLETE")
+
+    def snapshot_result_callback(self, msg):
+        try:
+            result = json.loads(msg.data)
+        except ValueError:
+            return
+        # The vision node repeats each reply five times and an abandoned
+        # request may still answer late, so match on the sequence number
+        # rather than trusting whatever arrived most recently.
+        if int(result.get("seq", -1)) != self.snapshot_seq:
+            return
+        if self.snapshot_result is None:
+            self.snapshot_result = result
+
+    def snapshot_enabled(self):
+        if self.vision_dock_all_missions:
+            return True
+        return (
+            self.vision_dock_mission >= 0
+            and self.mission_index == self.vision_dock_mission
+        )
+
+    def request_snapshot(self, now):
+        self.snapshot_seq += 1
+        self.snapshot_result = None
+        self.snapshot_deadline = now + self.snapshot_timeout_sec
+        self.snapshot_pose = self.world_pose()
+        x, y, _ = self.snapshot_pose
+        dock = self.dock_info["dock"]
+        # Range from the lens to the middle of the Dolly, which is what the
+        # deck's apparent width is set by.
+        range_m = max(
+            0.1,
+            math.hypot(dock["x"] - x, dock["y"] - y) - self.camera_forward_m,
+        )
+        message = String()
+        message.data = json.dumps(
+            {
+                "seq": self.snapshot_seq,
+                "amr": self.amr_name,
+                "mission": self.mission_index,
+                "range_m": range_m,
+                "deck_width_m": self.deck_width_across(
+                    math.radians(float(dock["yaw_deg"]))
+                ),
+            }
+        )
+        for _ in range(5):
+            self.snapshot_request_publisher.publish(message)
+        self.get_logger().info(
+            "SNAPSHOT requested at %.2f m standoff (seq %d)"
+            % (self.snapshot_standoff_m, self.snapshot_seq)
+        )
+
+    def apply_snapshot(self, result):
+        """Turn a measured bearing into a clamped lateral shift of the dock.
+
+        The bearing is measured from the robot's own heading, and at the moment
+        it is taken the robot is stopped facing the dock target, so the
+        difference between where the Dolly was seen and where the dock target
+        lies is the lateral error. Everything else about the approach - the
+        route, the speeds, the tolerances - is left exactly as it was.
+        """
+        self.dock_offset = (0.0, 0.0)
+
+        if result is None:
+            self.get_logger().warning(
+                "SNAPSHOT timed out, docking on coordinates alone"
+            )
+            return
+        if not result.get("ok"):
+            if result.get("present"):
+                # The useful half of the answer. Confirming the Dolly is there
+                # before committing is what vision is reliable at here; the
+                # trim is a bonus that this frame could not supply.
+                self.get_logger().info(
+                    "SNAPSHOT DOLLY CONFIRMED on %d/%d frames - entering dock "
+                    "on coordinates (%s)"
+                    % (
+                        int(result.get("seen", 0)),
+                        int(result.get("of", 0)),
+                        result.get("reason", ""),
+                    )
+                )
+            else:
+                self.get_logger().warning(
+                    "SNAPSHOT found no Dolly (%s), docking on coordinates alone"
+                    % result.get("reason", "no reason given")
+                )
+            return
+
+        bearing_deg = float(result["bearing_deg"])
+        if abs(bearing_deg) > self.snapshot_max_bearing_deg:
+            self.get_logger().warning(
+                "SNAPSHOT bearing %+.2f deg exceeds %.1f deg limit, ignored"
+                % (bearing_deg, self.snapshot_max_bearing_deg)
+            )
+            return
+
+        x, y, yaw = self.snapshot_pose
+        dock = self.dock_info["dock"]
+        # Where the dock target sits relative to the heading the robot is
+        # holding, so the two bearings are measured from the same place.
+        expected = normalize_angle(
+            math.atan2(dock["y"] - y, dock["x"] - x) - yaw
+        )
+        error_rad = math.radians(bearing_deg) - expected
+        range_m = math.hypot(dock["x"] - x, dock["y"] - y)
+        lateral = range_m * math.tan(error_rad)
+
+        clamped = max(
+            -self.snapshot_max_correction_m,
+            min(self.snapshot_max_correction_m, lateral),
+        )
+        # Left of the robot's heading, which is the direction the lateral error
+        # is measured along.
+        self.dock_offset = (
+            -math.sin(yaw) * clamped,
+            math.cos(yaw) * clamped,
+        )
+        self.get_logger().info(
+            "SNAPSHOT DOLLY seen at %+.2f deg (expected %+.2f deg, area %.1f%%, "
+            "%d/%d frames) -> lateral %+.3f m, applying %+.3f m"
+            % (
+                bearing_deg,
+                math.degrees(expected),
+                100.0 * float(result.get("area_fraction", 0.0)),
+                int(result.get("samples", 0)),
+                int(result.get("of", 0)),
+                lateral,
+                clamped,
+            )
+        )
 
     # The docking camera is a 30-degree-FOV lens, so a Dolly only fits in the
     # frame from roughly 2 m out. FINAL_DOCK alone starts at about 1.5 m, by
@@ -408,6 +689,11 @@ class AMRMissionController(Node):
         )
 
     def publish_stop(self):
+        # Clear the slew-rate state too. Leaving it set would make the next
+        # turn ramp from a speed the robot is no longer travelling at, which
+        # reintroduces exactly the step change smooth_angular() exists to
+        # avoid.
+        self.last_angular_cmd = 0.0
         self.publisher.publish(Twist())
 
     def publish_lift(self, position):
@@ -471,6 +757,13 @@ class AMRMissionController(Node):
         self.vision_complete = False
         self.vision_used = False
         self.vision_fallback_logged = False
+        # A correction belongs to the Dolly it was measured against. Carrying
+        # one into the next mission would offset a dock that was never looked
+        # at, so it is dropped here rather than at the end of the dock.
+        self.snapshot_result = None
+        self.dock_offset = (0.0, 0.0)
+        self.snapshot_done = False
+        self.snapshot_resume_state = None
         self.mission_started_at = time.monotonic()
         self.mission_travelled_at_start = self.travelled_m
         self.waypoints = [int(n) for n in mission["approach_route"]]
@@ -485,8 +778,115 @@ class AMRMissionController(Node):
 
     def begin_docking(self):
         self.send_dolly_command(self.DOLLY_CMD_FREEZE, "FREEZE")
+        if self.snapshot_enabled() and not self.snapshot_done:
+            # Only if the approach never passed the standoff, which happens
+            # when the route already starts inside it.
+            self.aim_at_standoff()
+        else:
+            self.aim_at_pre_dock()
+
+    @staticmethod
+    def longest_dolly_half_length(inventory, fallback):
+        """Half the longest Dolly footprint the bridge measured.
+
+        The longest rather than the matching one: a standoff that clears the
+        biggest Dolly clears all of them, and being a little further back only
+        costs a smaller Dolly in the frame, which the colour detector does not
+        mind. Choosing per-Dolly would mean trusting a path lookup to stay in
+        step with the inventory for no real gain.
+        """
+        lengths = [
+            float(dolly["half_length_m"])
+            for dolly in inventory.get("dollies", [])
+            if "half_length_m" in dolly
+        ]
+        return max(lengths) if lengths else fallback
+
+    @staticmethod
+    def dolly_footprint(inventory, fallback):
+        """Largest Dolly footprint (size_x, size_y) in world axes, in metres.
+
+        Kept as the two axes rather than reduced to one number: which of them
+        the camera sees across and which it sees into depends on the heading of
+        the particular dock, and guessing wrong picks the 0.86 m side of a
+        Dolly the camera is looking at 1.24 m of.
+        """
+        footprints = [
+            (float(dolly["size"][0]), float(dolly["size"][1]))
+            for dolly in inventory.get("dollies", [])
+            if "size" in dolly
+        ]
+        return max(footprints, key=lambda s: s[0] * s[1]) if footprints else fallback
+
+    def deck_width_across(self, heading_rad):
+        """Upper bound on how wide the Dolly can look. Deliberately not exact.
+
+        Predicting the exact width needs the Dolly's orientation relative to
+        the approach, and an attempt at that made things worse: the footprint
+        the bridge reports is already a world-axis bounding box, so applying
+        the Dolly's yaw to it rotated the rectangle twice. It predicted the
+        0.865 m side against a Dolly presenting 1.242 m, and the width gate
+        refused two correct detections in a row.
+
+        The gate does not need an exact figure. It exists to reject a blob
+        three metres wide - background plant merged with the deck - not to
+        measure. Predicting the longest side the Dolly could show, with the
+        tolerance already wide enough to cover the shortest (0.865 / 1.242 =
+        0.70, inside the +/-45% band), accepts either orientation and still
+        refuses anything that is not a Dolly at all.
+        """
+        if self.dolly_deck_width_m > 0.0:
+            return self.dolly_deck_width_m
+        return max(self.dolly_footprint_m)
+
+    def deck_depth_along(self, heading_rad):
+        """How much Dolly lies between its near edge and the dock target."""
+        size_x, size_y = self.dolly_footprint_m
+        return (
+            abs(size_x * math.cos(heading_rad))
+            + abs(size_y * math.sin(heading_rad))
+        ) / 2.0
+
+    def aim_at_standoff(self):
+        """Stop short of the Dolly, on the dock axis, facing it.
+
+        Backing off along the dock heading rather than picking an arbitrary
+        point keeps the robot pointed exactly where it will drive, so the
+        bearing the camera measures is directly comparable to the bearing of
+        the dock target and no extra frame conversion is needed.
+
+        The chassis has to stop far enough back that the *camera* clears the
+        Dolly's near edge by the requested distance, so the Dolly's own half
+        length and the camera's forward offset both come off the total.
+        """
+        dock = self.dock_info["dock"]
+        heading = math.radians(float(dock["yaw_deg"]))
+        half_depth = self.deck_depth_along(heading)
+        back_off = (
+            self.snapshot_standoff_m + half_depth + self.camera_forward_m
+        )
+        self.get_logger().info(
+            "STANDOFF %.2f m back from dock "
+            "(%.2f m clear + %.2f m Dolly half-depth + %.2f m camera offset)"
+            % (back_off, self.snapshot_standoff_m, half_depth,
+               self.camera_forward_m)
+        )
+        self.aim_at(
+            dock["x"] - back_off * math.cos(heading),
+            dock["y"] - back_off * math.sin(heading),
+            dock["yaw_deg"],
+            "VISION_STANDOFF",
+        )
+
+    def aim_at_pre_dock(self):
         pre = self.dock_info["pre_dock"]
-        self.aim_at(pre["x"], pre["y"], pre["yaw_deg"], "GO_TO_PRE_DOCK")
+        offset_x, offset_y = self.dock_offset
+        self.aim_at(
+            pre["x"] + offset_x,
+            pre["y"] + offset_y,
+            pre["yaw_deg"],
+            "GO_TO_PRE_DOCK",
+        )
 
     def current_mission(self):
         return self.missions[self.mission_index]
@@ -501,6 +901,60 @@ class AMRMissionController(Node):
             if self.odom_pose is not None and now >= self.release_at:
                 self.run_started_at = now
                 self.begin_mission(0)
+            return
+
+        if self.state == "WAIT_SNAPSHOT":
+            # Stationary by design: this is the only moment in the run where
+            # the camera is looking at the Dolly from a platform that is not
+            # moving, which is what makes a single measurement trustworthy.
+            self.publish_stop()
+            if self.snapshot_result is not None:
+                self.apply_snapshot(self.snapshot_result)
+            elif now > self.snapshot_deadline:
+                self.apply_snapshot(None)
+            else:
+                return
+            self.snapshot_hold_until = now + self.snapshot_dwell_sec
+            self.state = "SNAPSHOT_HOLD"
+            return
+
+        if self.state == "SNAPSHOT_ALIGN":
+            _, _, yaw = self.world_pose()
+            target = math.radians(float(self.dock_info["dock"]["yaw_deg"]))
+            error = normalize_angle(target - yaw)
+            if abs(error) > self.standoff_yaw_tolerance_rad:
+                command = Twist()
+                command.angular.z = self.smooth_angular(
+                    error, self.dock_angular_speed
+                )
+                self.publisher.publish(command)
+                return
+            self.publish_stop()
+            self.get_logger().info(
+                "STANDOFF aligned to %.1f deg, taking snapshot"
+                % math.degrees(target)
+            )
+            self.request_snapshot(now)
+            self.state = "WAIT_SNAPSHOT"
+            return
+
+        if self.state == "SNAPSHOT_HOLD":
+            # Deliberately doing nothing, so the recognition can be seen.
+            self.publish_stop()
+            if now >= self.snapshot_hold_until:
+                if self.snapshot_resume_state is not None:
+                    state, index = self.snapshot_resume_state
+                    self.snapshot_resume_state = None
+                    self.get_logger().info(
+                        "SNAPSHOT hold done, resuming approach"
+                    )
+                    # Carry on to the waypoint the approach was interrupted at,
+                    # rather than jumping to the dock: the route still has to
+                    # reach the pickup node before docking begins.
+                    self.aim_at_waypoint(index)
+                else:
+                    self.get_logger().info("SNAPSHOT hold done, entering dock")
+                    self.aim_at_pre_dock()
             return
 
         if self.state == "LIFT_UP":
@@ -645,9 +1099,92 @@ class AMRMissionController(Node):
             )
             return
 
+        if self.maybe_snapshot_on_approach(now):
+            return
+
         self.drive_towards_target(now)
 
     # ------------------------------------------------------------- steering
+
+    def smooth_angular(self, error, limit):
+        """Angular command that neither snaps nor crawls.
+
+        A bare proportional term does both. `1.2 * error` starts at the speed
+        cap the instant the turn begins, which pitches the chassis forward hard
+        enough to see, and then decays towards zero so the last degree takes
+        several seconds - the standoff alignment was measured at 10.2 s, almost
+        all of it in the tail.
+
+        Three changes fix it: a higher gain so the turn is decisive, a floor so
+        the tail is covered at a useful rate instead of asymptotically, and a
+        limit on how fast the command itself may change so the start is a ramp
+        rather than a step. The acceleration limit is what removes the lurch;
+        the floor is what removes the wait.
+        """
+        wanted = self.angular_gain * error
+        magnitude = min(limit, max(self.min_angular_speed, abs(wanted)))
+        wanted = math.copysign(magnitude, error)
+
+        # 20 Hz control loop, so this is rad/s per tick.
+        step = self.max_angular_accel * 0.05
+        delta = wanted - self.last_angular_cmd
+        if abs(delta) > step:
+            wanted = self.last_angular_cmd + math.copysign(step, delta)
+        self.last_angular_cmd = wanted
+        return wanted
+
+    def standoff_back_off(self):
+        """Chassis distance behind the dock target that clears the Dolly."""
+        heading = math.radians(float(self.dock_info["dock"]["yaw_deg"]))
+        return (
+            self.snapshot_standoff_m
+            + self.deck_depth_along(heading)
+            + self.camera_forward_m
+        )
+
+    def maybe_snapshot_on_approach(self, now):
+        """Take the picture on the way in, not after driving past.
+
+        The approach route ends at the pickup node, which for Node_10 sits
+        2.2 m nearer the Dolly than the standoff does. Aiming at the standoff
+        only after arriving there meant reversing away from the Dolly, stopping,
+        and driving back in - three moves where one would do, and it looked
+        like the robot had changed its mind.
+
+        Watching the range during the approach instead means the standoff is
+        reached going forwards. The robot is already pointed at the Dolly at
+        that moment, which is also the condition the bearing measurement needs.
+
+        Snapshotting at the pickup node itself is not an option: at 2.47 m the
+        deck spans 647 px of a 640 px frame, so it is clipped and unmeasurable.
+        """
+        if not self.snapshot_enabled() or self.snapshot_done:
+            return False
+        if self.state != "APPROACH" or self.dock_info is None:
+            return False
+
+        x, y, _ = self.world_pose()
+        dock = self.dock_info["dock"]
+        remaining = math.hypot(dock["x"] - x, dock["y"] - y)
+        if remaining > self.standoff_back_off():
+            return False
+
+        self.publish_stop()
+        self.snapshot_done = True
+        self.snapshot_resume_state = (self.state, self.waypoint_index)
+        self.get_logger().info(
+            "STANDOFF reached on approach at %.2f m from dock, "
+            "turning to face the Dolly" % remaining
+        )
+        # Stopping is not enough: the approach arrives on whatever heading the
+        # route left it on, and the first attempt at this measured 70 px of
+        # deck where 318 were predicted because the Dolly was off to one side.
+        # Turning on the spot to the dock heading costs a second and puts the
+        # Dolly in the middle of the frame, which is the condition every
+        # bearing figure in the worklog was measured under.
+        self.state = "SNAPSHOT_ALIGN"
+        self.reached = False
+        return True
 
     def drive_towards_target(self, now):
         if self.vision_active(now):
@@ -677,7 +1214,11 @@ class AMRMissionController(Node):
                 "(node stopped publishing or timed out)"
             )
 
-        docking = self.state == "FINAL_DOCK"
+        # The standoff is a place to stop and look, so it is approached at
+        # docking speed rather than cruise speed. Arriving fast meant arriving
+        # past the point, and recovering from that is what produced the long
+        # spin-in-place before the snapshot.
+        docking = self.state in ("FINAL_DOCK", "VISION_STANDOFF")
         tolerance = self.dock_tolerance if docking else self.tolerance
         angular_limit = (
             self.dock_angular_speed if docking else self.max_angular_speed
@@ -689,12 +1230,35 @@ class AMRMissionController(Node):
         dy = self.target_y - y
         distance = math.hypot(dx, dy)
 
+        # Ease off before arriving instead of running flat out into the
+        # tolerance band. At 4 m/s and a 20 Hz loop the robot covers 0.2 m per
+        # tick, so a target with a 0.1 m tolerance was routinely overshot; the
+        # controller then had to turn most of the way round and come back,
+        # which is the circling that was visible in the viewport. Scaling speed
+        # with the remaining distance removes the overshoot at the source.
+        if distance < self.approach_ramp_m:
+            linear_limit *= max(
+                self.min_approach_speed_fraction,
+                distance / self.approach_ramp_m,
+            )
+
         if distance <= tolerance and self.target_yaw is not None:
             yaw_error = normalize_angle(self.target_yaw - yaw)
-            if abs(yaw_error) > self.yaw_tolerance:
+            # The standoff is aimed tighter than a waypoint because the whole
+            # point of stopping there is the picture. Arriving 4.5 degrees off
+            # put a Dolly that was entirely visible far enough to one side that
+            # its deck ran past the frame edge, and a clipped deck has no
+            # usable centroid - the measurement was lost to heading, not to
+            # the detector.
+            yaw_limit = (
+                self.standoff_yaw_tolerance_rad
+                if self.state == "VISION_STANDOFF"
+                else self.yaw_tolerance
+            )
+            if abs(yaw_error) > yaw_limit:
                 command = Twist()
-                command.angular.z = max(
-                    -angular_limit, min(angular_limit, 1.2 * yaw_error)
+                command.angular.z = self.smooth_angular(
+                    yaw_error, angular_limit
                 )
                 self.publisher.publish(command)
                 return
@@ -707,6 +1271,23 @@ class AMRMissionController(Node):
 
         desired_yaw = math.atan2(dy, dx)
         heading_error = normalize_angle(desired_yaw - yaw)
+
+        # A target that ends up behind the robot by a few centimetres is not
+        # worth turning around for. Without this the controller would spin
+        # 180 degrees, drive the short distance, overshoot again and repeat -
+        # the circling that was visible at the standoff. Close enough and
+        # facing away is treated as arrived; the yaw alignment above still
+        # runs, so the final heading is unaffected.
+        if distance <= tolerance * 1.5 and abs(heading_error) > math.radians(120):
+            self.publish_stop()
+            self.reached = True
+            self.get_logger().info(
+                "%s close enough at %.3f m (target is behind by %.0f deg)"
+                % (self.state, distance, math.degrees(abs(heading_error)))
+            )
+            self.on_target_reached(now, x, y, yaw, distance)
+            return
+
         command = Twist()
         if abs(heading_error) > 0.18:
             command.angular.z = max(
@@ -757,13 +1338,34 @@ class AMRMissionController(Node):
                 self.enter_phase(now, self.lift_ramp_sec + 6.0)
             return
 
+        if state == "VISION_STANDOFF":
+            self.get_logger().info(
+                "REACHED STANDOFF world=(%.3f, %.3f, %.1f deg), error=%.3f m"
+                % (x, y, math.degrees(yaw), distance)
+            )
+            # Hold still until the answer arrives. The robot is already stopped
+            # by the reached branch above, and WAIT_SNAPSHOT keeps publishing
+            # zero velocity, so the frames the vision node measures are taken
+            # from a stationary platform.
+            self.request_snapshot(now)
+            self.state = "WAIT_SNAPSHOT"
+            self.reached = False
+            self.started_at = now
+            return
+
         if state == "GO_TO_PRE_DOCK":
             self.get_logger().info(
                 "REACHED PRE_DOCK world=(%.3f, %.3f, %.1f deg), error=%.3f m"
                 % (x, y, math.degrees(yaw), distance)
             )
             dock = self.dock_info["dock"]
-            self.aim_at(dock["x"], dock["y"], dock["yaw_deg"], "FINAL_DOCK")
+            offset_x, offset_y = self.dock_offset
+            self.aim_at(
+                dock["x"] + offset_x,
+                dock["y"] + offset_y,
+                dock["yaw_deg"],
+                "FINAL_DOCK",
+            )
             return
 
         if state == "FINAL_DOCK":

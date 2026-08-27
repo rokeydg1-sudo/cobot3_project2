@@ -35,7 +35,6 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
 
 
 # ============================================================
@@ -114,9 +113,7 @@ FINAL_ENTRY_SPEED_MPS = 0.18
 FALLBACK_DISTANCE_M = 2.35
 FALLBACK_LATERAL_M = 0.23
 FALLBACK_YAW_DEG = 11.0
-# Final entry must be entered from a live valid YOLO/PnP handoff, never from
-# a stale pose after the camera stream loses the target.
-INVALID_FRAMES_BEFORE_HANDOFF = 999999
+INVALID_FRAMES_BEFORE_HANDOFF = 3
 
 
 # ============================================================
@@ -194,17 +191,12 @@ class DollyDockingNode(Node):
 
         self.declare_parameter(
             "cmd_vel_topic",
-            "/dock/cmd_vel",
+            "/cmd_vel",
         )
 
         self.declare_parameter(
             "publish_cmd_vel",
             False,
-        )
-
-        self.declare_parameter(
-            "device",
-            "cpu",
         )
 
         self.declare_parameter(
@@ -222,17 +214,14 @@ class DollyDockingNode(Node):
             DONE_YAW_DEG,
         )
 
-        # Measured on real bridge frames the model scores a visible Dolly at
-        # 0.14-0.38, well under the 0.25 the synthetic validation suggested,
-        # because the real approach clips the Dolly against the image border.
         self.declare_parameter(
             "detection_conf",
-            0.12,
+            0.25,
         )
 
         self.declare_parameter(
             "keypoint_conf",
-            0.25,
+            0.35,
         )
 
         self.declare_parameter(
@@ -240,42 +229,18 @@ class DollyDockingNode(Node):
             12.0,
         )
 
-        # Accept a PnP solution only inside this range. Outside it the solve is
-        # geometry noise from a clipped Dolly, not a measurement.
-        self.declare_parameter("pnp_min_distance_m", 0.3)
-        self.declare_parameter("pnp_max_distance_m", 12.0)
-
-        # Dolly width across the keypoint set (P1..P4 span y = +/-0.6 m), used
-        # to turn an apparent box width into a range.
-        self.declare_parameter("dolly_width_m", 1.20)
-
-        # Range assumed once the box touches the image border, where the true
-        # width is unmeasurable and the pinhole estimate reads too far.
-        self.declare_parameter("bbox_clipped_distance_m", 1.80)
-
-        # A frame whose brightest pixel is at or below this is a dead render,
-        # not a dark scene. Isaac's blank frames are exactly zero.
-        self.declare_parameter("black_frame_max_level", 2)
-
         # Current SDG/model operating range starts at ~2.0 m.
         self.declare_parameter(
             "handoff_distance_m",
             HANDOFF_DISTANCE_M,
         )
 
-        # After vision alignment reaches the handoff point, move straight
-        # open-loop until the AMR reference is approximately centered under
-        # the Dolly.
-        #
-        # Off by default now. The open-loop entry publishes on the same
-        # /dock/cmd_vel topic as real tracking, so a run where vision never saw
-        # anything still looked like "VISION DOCKING engaged" in the controller
-        # log - the demo could not be told apart from a failure. Releasing the
-        # topic instead makes the mission controller's own coordinate docking
-        # finish the insert, which is both safer and unambiguous.
+        # After vision alignment reaches the handoff point,
+        # move straight open-loop until the AMR reference is
+        # approximately centered under the Dolly.
         self.declare_parameter(
             "enable_final_entry",
-            False,
+            True,
         )
 
         self.declare_parameter(
@@ -291,11 +256,6 @@ class DollyDockingNode(Node):
         self.declare_parameter(
             "image_watchdog_timeout_s",
             0.75,
-        )
-
-        self.declare_parameter("debug_image_path", "")
-        self.declare_parameter(
-            "debug_image_topic", "/vision/dolly_docking/debug_image"
         )
 
         # Near the Dolly, keypoints can leave the camera FOV.
@@ -413,8 +373,6 @@ class DollyDockingNode(Node):
             ).value
         )
 
-        self.device = str(self.get_parameter("device").value)
-
         self.process_hz = float(
             self.get_parameter(
                 "process_hz"
@@ -432,29 +390,6 @@ class DollyDockingNode(Node):
                 "keypoint_conf"
             ).value
         )
-
-        self.pnp_min_distance_m = float(
-            self.get_parameter("pnp_min_distance_m").value
-        )
-        self.pnp_max_distance_m = float(
-            self.get_parameter("pnp_max_distance_m").value
-        )
-        self.dolly_width_m = float(
-            self.get_parameter("dolly_width_m").value
-        )
-        self.bbox_clipped_distance_m = float(
-            self.get_parameter("bbox_clipped_distance_m").value
-        )
-        # Overwritten from the first frame; only used to spot a box that runs
-        # off the side of the image.
-        self.image_width = 1280.0
-        self.detection = None
-        self.released_reason = None
-        self.black_frame_max_level = int(
-            self.get_parameter("black_frame_max_level").value
-        )
-        self.black_frame_count = 0
-        self.last_black_log_time = 0.0
 
         self.pnp_reprojection_error_px = float(
             self.get_parameter(
@@ -491,12 +426,6 @@ class DollyDockingNode(Node):
                 "image_watchdog_timeout_s"
             ).value
         )
-
-        self.debug_image_path = str(self.get_parameter("debug_image_path").value)
-        self.debug_image_topic = str(
-            self.get_parameter("debug_image_topic").value
-        )
-        self.debug_image_saved = False
 
         self.invalid_frames_before_handoff = int(
             self.get_parameter(
@@ -673,12 +602,6 @@ class DollyDockingNode(Node):
                 10,
             )
         )
-        self.status_pub = self.create_publisher(String, "/dock/status", 10)
-        # Annotated camera feed for rqt_image_view. Purely for presentation;
-        # nothing in the control path depends on it.
-        self.debug_image_pub = self.create_publisher(
-            Image, self.debug_image_topic, 1
-        )
 
         self.image_sub = (
             self.create_subscription(
@@ -709,7 +632,6 @@ class DollyDockingNode(Node):
 
         self.last_valid_pose = None
         self.invalid_pose_count = 0
-        self.last_vision_reason = None
 
         self.watchdog_timer = self.create_timer(
             0.10,
@@ -731,8 +653,6 @@ class DollyDockingNode(Node):
         self.get_logger().info(
             f"publish_cmd_vel={self.publish_cmd_vel}"
         )
-
-        self.get_logger().info(f"device={self.device}")
 
         self.get_logger().info(
             f"handoff_distance={self.handoff_distance_m:.2f} m"
@@ -845,7 +765,6 @@ class DollyDockingNode(Node):
                 "DOCKING COMPLETE | "
                 "final straight entry finished -> STOP"
             )
-            self.publish_status("DOCKING_COMPLETE")
 
             return
 
@@ -906,11 +825,6 @@ class DollyDockingNode(Node):
         self.cmd_pub.publish(
             msg
         )
-
-    def publish_status(self, value):
-        msg = String()
-        msg.data = value
-        self.status_pub.publish(msg)
 
 
     def stop_robot(self):
@@ -1098,80 +1012,6 @@ class DollyDockingNode(Node):
         )
 
     # ========================================================
-    # Handing control back
-    # ========================================================
-
-    def release_control(self, reason):
-        """Stop publishing so the mission controller reclaims the robot.
-
-        Silence is the handover signal. The controller only obeys /dock/cmd_vel
-        while messages keep arriving, so not publishing is what returns the
-        robot to coordinate docking - and it is also the fail-safe, since a
-        crashed vision node produces exactly the same silence.
-        """
-        if self.released_reason == reason:
-            return
-        self.released_reason = reason
-        self.get_logger().info(f"VISION RELEASE | {reason}")
-
-    # ========================================================
-    # Bounding-box pose (PnP fallback)
-    # ========================================================
-
-    def pose_from_bbox(self):
-        """Estimate range and bearing from the detection box alone.
-
-        The eight-point solution needs every keypoint inside the image. With a
-        30-degree lens the Dolly starts spilling over the border at about 2 m,
-        which is exactly the range that matters for docking, so PnP drops out
-        precisely when it is needed. The box survives that: its horizontal
-        centre still gives a bearing, and its width still gives a usable range.
-
-        Only two of the three degrees of freedom are observable this way, so
-        yaw is reported as zero. That is honest rather than convenient - the
-        controller then corrects lateral offset only and leaves the final
-        heading to coordinate docking, instead of acting on a fabricated angle.
-        """
-        detection = getattr(self, "detection", None)
-        if detection is None:
-            return None
-
-        x1, y1, x2, y2 = detection["bbox_xyxy"]
-        width_px = max(1.0, x2 - x1)
-        centre_u = 0.5 * (x1 + x2)
-
-        fx = float(self.K[0, 0])
-        cx = float(self.K[0, 2])
-
-        # Pinhole: apparent width shrinks with range. When the box runs off the
-        # side of the image the measured width is a lower bound, so the range
-        # comes out too large; clamping keeps that from ever reading as "far
-        # away and safe to accelerate".
-        clipped = x1 <= 1.0 or x2 >= (self.image_width - 1.0)
-        distance_m = fx * self.dolly_width_m / width_px
-        if clipped:
-            distance_m = min(distance_m, self.bbox_clipped_distance_m)
-
-        bearing_rad = math.atan2(centre_u - cx, fx)
-        lateral_m = distance_m * math.tan(bearing_rad)
-
-        self.last_vision_reason = (
-            f"bbox_only d={distance_m:.2f} clipped={clipped}"
-        )
-
-        return {
-            "bbox_xyxy": detection["bbox_xyxy"],
-            "keypoints_xy": detection["keypoints_xy"],
-            "distance_m": distance_m,
-            "lateral_m": lateral_m,
-            "yaw_deg": 0.0,
-            "bbox_conf": detection["bbox_conf"],
-            "used_keypoints": 0,
-            "inliers": 0,
-            "source": "bbox",
-        }
-
-    # ========================================================
     # YOLO + PnP
     # ========================================================
 
@@ -1184,7 +1024,7 @@ class DollyDockingNode(Node):
             source=image,
             imgsz=640,
             conf=self.detection_conf,
-            device=self.device,
+            device=0,
             verbose=False,
         )[0]
 
@@ -1195,7 +1035,6 @@ class DollyDockingNode(Node):
             or
             result.keypoints is None
         ):
-            self.last_vision_reason = "no_boxes_or_keypoints"
             return None
 
         box_conf = (
@@ -1220,24 +1059,6 @@ class DollyDockingNode(Node):
             .numpy()
         )
 
-        # Remember the detection before attempting PnP. Every PnP failure below
-        # falls back to a bounding-box pose rather than discarding the frame:
-        # the docking lens is narrow enough that the Dolly is usually clipped by
-        # the image border at approach range, which ruins the eight-point
-        # solution while the box itself is still a perfectly good bearing
-        # measurement.
-        self.detection = {
-            "bbox_xyxy": (
-                result.boxes.xyxy[best_index]
-                .detach()
-                .cpu()
-                .numpy()
-                .tolist()
-            ),
-            "keypoints_xy": xy.tolist(),
-            "bbox_conf": float(box_conf[best_index]),
-        }
-
         kp_conf_tensor = (
             result.keypoints.conf
         )
@@ -1260,19 +1081,16 @@ class DollyDockingNode(Node):
                 .numpy()
             )
 
-        if len(xy) != len(self.object_points_all):
-            self.last_vision_reason = f"keypoint_count={len(xy)} expected={len(self.object_points_all)}"
-            return self.pose_from_bbox()
-
         keep = np.where(
             kp_conf
             >= self.keypoint_conf
         )[0]
 
-        # Use all predicted points when available. Four points can be
-        # geometrically degenerate after confidence filtering.
         if len(keep) < 4:
-            keep = np.arange(len(xy))
+
+            keep = np.argsort(
+                kp_conf
+            )[-4:]
 
         object_points = (
             self.object_points_all[
@@ -1305,12 +1123,7 @@ class DollyDockingNode(Node):
         )
 
         if not ok:
-            self.last_vision_reason = (
-                f"pnp_failed boxes={len(result.boxes)} "
-                f"box_conf={box_conf[best_index]:.3f} "
-                f"kp={len(keep)} kp_max={np.max(kp_conf):.3f}"
-            )
-            return self.pose_from_bbox()
+            return None
 
         if (
             inliers is not None
@@ -1380,35 +1193,7 @@ class DollyDockingNode(Node):
             * yaw_raw_deg
         )
 
-        # A clipped Dolly can still produce a "successful" PnP solve that puts
-        # the target behind the camera or a hundred metres away. Reject those
-        # and fall back to the box, otherwise the controller would be steered by
-        # a confidently wrong number.
-        if not (
-            self.pnp_min_distance_m
-            <= distance_m
-            <= self.pnp_max_distance_m
-        ):
-            self.last_vision_reason = (
-                f"pnp_distance_out_of_range={distance_m:.2f}"
-            )
-            return self.pose_from_bbox()
-
         return {
-            "bbox_xyxy": (
-                result.boxes.xyxy[best_index]
-                .detach()
-                .cpu()
-                .numpy()
-                .tolist()
-            ),
-            "keypoints_xy": (
-                result.keypoints.xy[best_index]
-                .detach()
-                .cpu()
-                .numpy()
-                .tolist()
-            ),
             "distance_m": distance_m,
             "lateral_m": lateral_m,
             "yaw_deg": yaw_deg,
@@ -1427,69 +1212,7 @@ class DollyDockingNode(Node):
                     len(inliers)
                 )
             ),
-            "source": "pnp",
         }
-
-    # ========================================================
-    # Presentation overlay
-    # ========================================================
-
-    def publish_debug_image(self, image, pose, state):
-        """Draw the detection on the frame and publish it for rqt_image_view."""
-        if self.debug_image_pub.get_subscription_count() == 0:
-            return
-
-        canvas = image.copy()
-        colour = (0, 220, 60) if pose else (40, 40, 235)
-
-        if pose and pose.get("bbox_xyxy"):
-            x1, y1, x2, y2 = (int(v) for v in pose["bbox_xyxy"])
-            cv2.rectangle(canvas, (x1, y1), (x2, y2), colour, 2)
-            cv2.putText(
-                canvas,
-                f"dolly {pose['bbox_conf']:.2f}",
-                (x1, max(18, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                colour,
-                2,
-            )
-            for i, (kx, ky) in enumerate(pose.get("keypoints_xy", [])):
-                cv2.circle(canvas, (int(kx), int(ky)), 5, (0, 165, 255), -1)
-                cv2.putText(
-                    canvas,
-                    str(i),
-                    (int(kx) + 6, int(ky) - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    (0, 165, 255),
-                    1,
-                )
-
-        lines = [f"STATE: {state}"]
-        if pose:
-            lines += [
-                f"conf {pose['bbox_conf']:.2f}  src {pose['source']}",
-                f"dist {pose['distance_m']:.2f} m",
-                f"lat  {pose['lateral_m']:+.2f} m",
-                f"yaw  {pose['yaw_deg']:+.1f} deg",
-                f"kp {pose['used_keypoints']}  inl {pose['inliers']}",
-            ]
-        else:
-            lines.append(f"no pose: {self.last_vision_reason}")
-
-        for i, text in enumerate(lines):
-            y = 24 + i * 22
-            cv2.putText(
-                canvas, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3
-            )
-            cv2.putText(
-                canvas, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 1
-            )
-
-        out = self.bridge.cv2_to_imgmsg(canvas, encoding="bgr8")
-        out.header.frame_id = "front_camera"
-        self.debug_image_pub.publish(out)
 
     # ========================================================
     # ROS callback
@@ -1541,40 +1264,8 @@ class DollyDockingNode(Node):
                 )
             )
 
-            self.image_width = float(image.shape[1])
-
-            # Isaac occasionally publishes an all-black frame: the renderer
-            # needs a few seconds to warm up and then drops the odd frame
-            # afterwards. Measured over two runs, 4-9% of frames came through
-            # completely black, and the model happily scored one of them as a
-            # Dolly at 0.25 confidence. Acting on that would steer the robot
-            # from a hallucination, so treat a dead frame as no frame at all
-            # and let the release path hand back to coordinate docking.
-            if int(image.max()) <= self.black_frame_max_level:
-                self.black_frame_count += 1
-                self.release_control("black frame")
-                if now - self.last_black_log_time > 2.0:
-                    self.get_logger().warn(
-                        "Camera frame is blank "
-                        f"(total={self.black_frame_count}); ignoring"
-                    )
-                    self.last_black_log_time = now
-                self.publish_debug_image(image, None, "NO SIGNAL")
-                return
-
-            if self.debug_image_path and not self.debug_image_saved:
-                cv2.imwrite(self.debug_image_path, image)
-                self.debug_image_saved = True
-
-            self.detection = None
             pose = self.estimate_pose(
                 image
-            )
-
-            self.publish_debug_image(
-                image,
-                pose,
-                "TRACKING" if pose else "SEARCHING",
             )
 
             if pose is None:
@@ -1586,12 +1277,6 @@ class DollyDockingNode(Node):
                 # If the last valid pose was already sufficiently
                 # close and aligned, transition immediately to
                 # the open-loop final straight entry.
-                if self.invalid_pose_count == 1 or now - self.last_log_time > 2.0:
-                    self.get_logger().warn(
-                        f"Vision invalid reason={self.last_vision_reason}"
-                    )
-                    self.last_log_time = now
-
                 if (
                     self.enable_final_entry
                     and
@@ -1627,11 +1312,7 @@ class DollyDockingNode(Node):
                     )
                     return
 
-                # Deliberately publish nothing. Sending zeros would pin the
-                # robot in place, because the mission controller forwards
-                # whatever arrives on /dock/cmd_vel. Going silent lets its
-                # one-second timeout expire so coordinate docking resumes.
-                self.release_control("no detection")
+                self.stop_robot()
 
                 if (
                     now
@@ -1640,7 +1321,7 @@ class DollyDockingNode(Node):
                 ):
 
                     self.get_logger().warn(
-                        "Vision invalid -> releasing to coordinate docking"
+                        "Vision/PnP invalid -> STOP"
                     )
 
                     self.last_log_time = now
@@ -1666,23 +1347,20 @@ class DollyDockingNode(Node):
                 )
             )
 
-            if state == "HANDOFF_READY":
+            if (
+                state == "HANDOFF_READY"
+                and
+                self.enable_final_entry
+            ):
 
-                self.publish_status("HANDOFF_READY")
+                self.start_final_entry()
 
-                if self.enable_final_entry:
-                    self.start_final_entry()
-                    self.run_final_entry(
-                        now
-                    )
-                    return
+                self.run_final_entry(
+                    now
+                )
 
-                # Aligned and as close as this lens can measure. Hand the last
-                # few centimetres back to coordinate docking.
-                self.release_control("handoff reached")
                 return
 
-            self.released_reason = None
             self.publish_twist(
                 linear_x,
                 angular_z,
@@ -1703,8 +1381,7 @@ class DollyDockingNode(Node):
                     f"w={angular_z:+.3f} | "
                     f"kp={pose['used_keypoints']} | "
                     f"inliers={pose['inliers']} | "
-                    f"conf={pose['bbox_conf']:.2f} | "
-                    f"src={pose['source']}"
+                    f"conf={pose['bbox_conf']:.2f}"
                 )
 
                 self.last_log_time = now

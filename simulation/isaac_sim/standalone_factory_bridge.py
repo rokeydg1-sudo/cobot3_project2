@@ -161,9 +161,32 @@ CAMERA_NAME = "transporter_camera_first_person"
 # inference only matches training if the camera looks straight ahead and roughly
 # level. Only the pose is rebuilt here; the optics below are still copied from
 # the authored camera, so the calibrated intrinsics stay valid.
+# The authored waypoint markers are white spheres parked at z = 0.15 m, which
+# is inside the docking camera's line of sight. Node 10 sits on amr1's approach
+# line to its pickup Dolly, and a frame captured 1.07 m short of it was one
+# smooth white surface edge to edge - the detector had nothing else to look at.
+# Hidden by default; set SHOW_WAYPOINT_GRAPH=1 to get them back for debugging.
+SHOW_WAYPOINT_GRAPH = os.environ.get("SHOW_WAYPOINT_GRAPH", "0") in (
+    "1",
+    "true",
+    "True",
+)
+
+# Periodically print the docking camera's composed world pose, for checking the
+# aim against what the pictures actually show.
+CAMERA_DEBUG = os.environ.get("CAMERA_DEBUG", "0") in ("1", "true", "True")
+
 CAMERA_FORWARD_M = float(os.environ.get("CAMERA_FORWARD_M", "0.55"))
 CAMERA_HEIGHT_M = float(os.environ.get("CAMERA_HEIGHT_M", "0.45"))
 CAMERA_PITCH_DEG = float(os.environ.get("CAMERA_PITCH_DEG", "4.0"))
+
+# Overwrite the camera's optics from the intrinsics file. Off by default: the
+# renderer does not honour the values reliably, and the file is now a
+# calibrated description of the authored lens rather than a request to change
+# it. See create_docking_camera().
+FORCE_CAMERA_OPTICS = os.environ.get("FORCE_CAMERA_OPTICS", "0") in (
+    "1", "true", "True",
+)
 
 CAMERA_WIDTH = int(os.environ.get("CAMERA_WIDTH", "1280"))
 CAMERA_HEIGHT = int(os.environ.get("CAMERA_HEIGHT", "720"))
@@ -373,23 +396,75 @@ def create_docking_camera(stage, robot_path, source_camera_path):
         if value is not None:
             destination.Set(value)
 
-    # Keep the committed training intrinsics authoritative. USD aperture is
-    # derived from the authored focal length and K at the actual RGB size.
-    if INTRINSICS_PATH.exists():
+    # Keep the committed intrinsics authoritative, by moving the focal length
+    # rather than the aperture.
+    #
+    # Setting the aperture alone did not work. The bridge logged
+    # aperture=(0.335640, 0.188797) for a 60-degree lens, but measuring the
+    # Dolly deck in the resulting frames - known width 1.242 m, known range
+    # from odometry - gave an effective fx of about 1467 across five distances
+    # with 3% spread, where 554 was configured. Castor diameter agreed at
+    # 1270-1450. In other words the renderer kept using the authored optics and
+    # the frames were still roughly the authored 30-degree telephoto, while
+    # every consumer of the intrinsics file believed otherwise. That single
+    # mismatch is what made a Dolly appear two and a half times too large,
+    # which in turn made the width gates reject everything and made bearings
+    # computed from those pixels wrong.
+    #
+    # Holding the aperture at whatever the asset authored and solving for the
+    # focal length instead means the field of view comes out right whichever of
+    # the two the renderer actually reads, because both now describe the same
+    # lens.
+    if FORCE_CAMERA_OPTICS and INTRINSICS_PATH.exists():
         intrinsics = np.load(INTRINSICS_PATH)
         K = np.asarray(intrinsics["K"], dtype=float)
-        focal_length = float(source_camera.GetFocalLengthAttr().Get())
-        camera.GetHorizontalApertureAttr().Set(
-            focal_length * CAMERA_WIDTH / K[0, 0]
+
+        horizontal_aperture = float(
+            source_camera.GetHorizontalApertureAttr().Get()
         )
-        camera.GetVerticalApertureAttr().Set(
-            focal_length * CAMERA_HEIGHT / K[1, 1]
-        )
+        vertical_aperture = horizontal_aperture * CAMERA_HEIGHT / CAMERA_WIDTH
+        focal_length = K[0, 0] * horizontal_aperture / CAMERA_WIDTH
+
+        camera.GetFocalLengthAttr().Set(focal_length)
+        camera.GetHorizontalApertureAttr().Set(horizontal_aperture)
+        camera.GetVerticalApertureAttr().Set(vertical_aperture)
         print(
-            f"  projection_from_intrinsics=fx={K[0, 0]:.3f}, fy={K[1, 1]:.3f}, "
-            f"aperture=({camera.GetHorizontalApertureAttr().Get():.6f}, "
-            f"{camera.GetVerticalApertureAttr().Get():.6f})"
+            f"  FORCED optics from intrinsics: fx={K[0, 0]:.1f}, "
+            f"focal={focal_length:.4f}",
+            flush=True,
         )
+    else:
+        # Describe the lens, do not dictate it.
+        #
+        # Two attempts to widen the field of view from the intrinsics file both
+        # failed silently. Setting the aperture logged a 60-degree lens while
+        # the renderer kept producing about 30 degrees; setting the focal
+        # length moved the measured fx from 1467 to 1286 instead of to the
+        # requested 554. Meanwhile every consumer trusted the file, so a Dolly
+        # appeared two and a half times larger than predicted, width gates
+        # rejected everything, and bearings computed from those pixels were
+        # wrong by up to 35 degrees.
+        #
+        # Leaving the authored optics alone and calibrating the file to match
+        # what actually comes out fixed it: bearing error fell from a standard
+        # deviation of about 19 degrees to 3.0, with the median at zero.
+        # Re-measure with the fx check in the worklog if the camera moves.
+        focal = float(camera.GetFocalLengthAttr().Get())
+        aperture = float(camera.GetHorizontalApertureAttr().Get())
+        implied_fx = focal * CAMERA_WIDTH / aperture
+        print(
+            f"  authored optics kept: focal={focal:.4f}, "
+            f"aperture={aperture:.6f}, implied fx={implied_fx:.1f} "
+            f"at {CAMERA_WIDTH} px",
+            flush=True,
+        )
+        if INTRINSICS_PATH.exists():
+            K = np.asarray(np.load(INTRINSICS_PATH)["K"], dtype=float)
+            print(
+                f"  calibrated fx in {INTRINSICS_PATH.name}: {K[0, 0]:.1f} "
+                "(measured from rendered frames, authoritative for bearing)",
+                flush=True,
+            )
 
     print("\n[DOCKING CAMERA CREATED]")
     print(f"  chassis={chassis.GetPath()}")
@@ -502,6 +577,14 @@ TASKS = [
     {"id": "T4", "dolly": "/World/dolly_physics_02", "pickup": 11, "dropoff": 13},
     {"id": "T5", "dolly": "/World/dolly_physics_04", "pickup": 4, "dropoff": 8},
     {"id": "T6", "dolly": "/World/dolly_physics_07", "pickup": 6, "dropoff": 2},
+    # Seventh task so the fleet splits 3/2/2 instead of 3/2/1.
+    #
+    # With six tasks the optimiser left amr3 carrying only T6, which reads as an
+    # idle robot however good the makespan is. This one starts from the spare
+    # Dolly at the same park as T6 (dolly_physics_06) and ends at Node_5, which
+    # is where amr3 spawns, so it pairs naturally with T6 rather than pulling
+    # another robot across the factory.
+    {"id": "T7", "dolly": "/World/dolly_physics_06", "pickup": 6, "dropoff": 5},
 ]
 
 # "auto" lets the planner choose; "manual" reproduces the hand-written baseline.
@@ -510,7 +593,7 @@ PLAN_SOLVER = os.environ.get("PLAN_SOLVER", "auto")
 MANUAL_ASSIGNMENT = {
     "amr1": ["T1", "T4"],
     "amr2": ["T2", "T5"],
-    "amr3": ["T3", "T6"],
+    "amr3": ["T6", "T7"],
 }
 
 # The vision-docking demo runs a two-robot fleet so both AMRs stay on screen and
@@ -523,7 +606,7 @@ FLEET = [
 ]
 TASK_IDS = [
     task_id.strip()
-    for task_id in os.environ.get("TASK_IDS", "T1,T2,T3,T4").split(",")
+    for task_id in os.environ.get("TASK_IDS", "T1,T2,T3,T4,T5,T6,T7").split(",")
     if task_id.strip()
 ]
 
@@ -883,6 +966,70 @@ def create_route_visual(
         "(no collider, hidden until pickup)",
         flush=True,
     )
+
+
+
+RESET_REQUEST_FILE = Path(
+    os.environ.get("SIM_RESET_FILE", "/tmp/sim_reset_request")
+)
+
+
+def capture_reset_state(stage, dolly_paths, amr_paths):
+    """Record where everything starts, so a run can be repeated exactly.
+
+    The evaluation asks that Play/Stop return the scene to the same initial
+    state, and that a completed run can be run again. Neither held: a Dolly
+    delivered to its drop node stays there, so restarting the controllers sends
+    a robot to fetch something that is no longer present. That was observed as
+    a snapshot reporting "no blue region" - the detector was right, the scene
+    was stale.
+
+    Local transforms are stored rather than world poses. Writing a world pose
+    back requires knowing the parent transform at the time of the write, and
+    the AMR chassis moves under its own parent; the local matrix is what the
+    prim actually holds and can be restored without that dependency.
+    """
+    state = {}
+    for path in list(dolly_paths) + list(amr_paths):
+        prim = stage.GetPrimAtPath(path)
+        if not prim.IsValid():
+            continue
+        xformable = UsdGeom.Xformable(prim)
+        state[path] = Gf.Matrix4d(xformable.GetLocalTransformation())
+    print(f"[RESET] captured initial pose of {len(state)} prim(s)", flush=True)
+    return state
+
+
+def restore_reset_state(stage, state):
+    """Put every recorded prim back where it started."""
+    restored = 0
+    for path, matrix in state.items():
+        prim = stage.GetPrimAtPath(path)
+        if not prim.IsValid():
+            continue
+        xformable = UsdGeom.Xformable(prim)
+        ops = xformable.GetOrderedXformOps()
+        if len(ops) == 1 and ops[0].GetOpType() == UsdGeom.XformOp.TypeTransform:
+            ops[0].Set(matrix)
+        else:
+            xformable.ClearXformOpOrder()
+            xformable.AddTransformOp().Set(matrix)
+        restored += 1
+    print(f"[RESET] restored {restored} prim(s) to their initial pose", flush=True)
+    return restored
+
+
+def poll_reset_request():
+    """True once per request. File based, for the same reason the Dolly
+    commands are: the bridge is not an rclpy node, so it cannot subscribe.
+    """
+    if not RESET_REQUEST_FILE.exists():
+        return False
+    try:
+        RESET_REQUEST_FILE.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def freeze_target_dolly(stage, dolly_path=None):
@@ -1365,8 +1512,59 @@ def find_waypoint_nodes(stage):
     return sorted(nodes, key=node_sort_key)
 
 
+def report_camera_aim(stage, camera_path, runtime):
+    """Print where the docking camera really is and what it is pointed at.
+
+    Reasoning about the camera from the robot pose plus the mount constants kept
+    disagreeing with the pictures: the geometry said a Dolly filled most of the
+    frame while the frame showed an empty aisle. Rather than keep guessing at
+    the transform, read the composed world matrix straight off the stage and
+    compare it against the target Dolly.
+
+    A USD camera looks down its own -Z axis, so the third row of the
+    local-to-world matrix, negated, is the viewing direction.
+    """
+    camera = stage.GetPrimAtPath(camera_path)
+    if not camera.IsValid():
+        return
+    cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    world = cache.GetLocalToWorldTransform(camera)
+    eye = world.ExtractTranslation()
+    view = -Gf.Vec3d(world[2][0], world[2][1], world[2][2]).GetNormalized()
+
+    heading_deg = math.degrees(math.atan2(view[1], view[0]))
+    pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, view[2]))))
+
+    message = (
+        f"[CAMERA AIM] eye=({eye[0]:.3f}, {eye[1]:.3f}, {eye[2]:.3f}) "
+        f"heading={heading_deg:+.1f} pitch={pitch_deg:+.1f}"
+    )
+
+    for robot in runtime:
+        if robot["active"] >= len(robot["missions"]):
+            continue
+        dolly = stage.GetPrimAtPath(
+            robot["missions"][robot["active"]]["dolly_path"]
+        )
+        if not dolly.IsValid():
+            continue
+        pose = world_pose_of_prim(dolly)
+        to_dolly = Gf.Vec3d(pose["x"] - eye[0], pose["y"] - eye[1], 0.0)
+        distance = to_dolly.GetLength()
+        bearing = math.degrees(
+            math.atan2(to_dolly[1], to_dolly[0])
+        ) - heading_deg
+        message += (
+            f" | {robot['name']} dolly d={distance:.2f} "
+            f"bearing={normalize_deg(bearing):+.1f}"
+        )
+        break
+
+    print(message, flush=True)
+
+
 def hide_waypoint_graph(stage):
-    """Hide the authored waypoint markers so they stop blocking the camera.
+    """Remove the authored waypoint markers so they stop blocking the camera.
 
     The node markers sit at z = 0.15 m, which is squarely inside the docking
     camera's line of sight - the camera is 0.45 m up and tilted 4 degrees down,
@@ -1374,25 +1572,111 @@ def hide_waypoint_graph(stage):
     Node 10 in particular sits directly between amr1 and its pickup Dolly, and
     the detector never saw the Dolly because a marker was in front of it.
 
-    Only visibility changes. Positions and edges have already been read into the
-    inventory and the planner graph by this point, so nothing downstream needs
-    the geometry, and the original USD is never written.
+    Deactivating the root prim, not just clearing its visibility, is what makes
+    the graph actually go away. `MakeInvisible` only authors an opinion on the
+    prim it is called on, and the marker meshes underneath carry their own
+    authored visibility, so the two Xforms reported themselves hidden while the
+    spheres kept rendering. Deactivation prunes the whole subtree out of
+    composition instead, which no descendant opinion can override, and it also
+    drops the markers from the viewport and the Stage tree.
+
+    Positions and edges have already been read into the inventory and the
+    planner graph by this point, so nothing downstream needs the geometry.
+    Deactivation is a stage-local edit and the original USD is never written.
     """
     if SHOW_WAYPOINT_GRAPH:
         print("[WAYPOINT GRAPH] left visible (SHOW_WAYPOINT_GRAPH=1)", flush=True)
         return
 
-    hidden = []
-    for path in ("/World/WaypointGraph/Nodes", "/World/WaypointGraph/Edges"):
-        prim = stage.GetPrimAtPath(path)
-        if not prim.IsValid():
-            continue
-        UsdGeom.Imageable(prim).MakeInvisible()
-        hidden.append(f"{path.rsplit('/', 1)[-1]}({len(prim.GetChildren())})")
+    root = stage.GetPrimAtPath("/World/WaypointGraph")
+    if root.IsValid():
+        children = {
+            child.GetName(): len(child.GetChildren())
+            for child in root.GetChildren()
+        }
+        root.SetActive(False)
+        summary = ", ".join(f"{name}({count})" for name, count in children.items())
+        print(
+            f"[WAYPOINT GRAPH] deactivated /World/WaypointGraph: "
+            f"{summary or 'no children'}",
+            flush=True,
+        )
+        return
+
+    # Older stages scatter the markers instead of parenting them under a single
+    # root. Fall back to hiding whatever carries a Node_/Edge_ name.
+    hidden = 0
+    for prim in stage.Traverse():
+        name = prim.GetName()
+        if name.startswith("Node_") or name.startswith("Edge_"):
+            UsdGeom.Imageable(prim).MakeInvisible()
+            hidden += 1
+    print(f"[WAYPOINT GRAPH] no root prim; hid {hidden} loose marker(s)", flush=True)
+
+
+
+CUOPT_PLAN_PATH = Path(
+    os.environ.get("CUOPT_PLAN", str(SCRIPT_DIR / "cuopt_plan.json"))
+)
+
+
+def load_cuopt_plan(graph, tasks, vehicles):
+    """Read the assignment cuOpt produced, and score it like any other plan.
+
+    cuOpt is solved out of process. It needs cudf and lives in
+    ~/.venvs/cuopt on Python 3.12, while this bridge runs on Isaac Sim's
+    Python 3.11; neither interpreter can import the other's packages, and
+    putting cudf next to Isaac's CUDA stack is not worth the risk. So
+    scripts/plan_cuopt.py solves it and leaves a file here.
+
+    The plan is re-scored through planner._build_result rather than trusted, so
+    the makespan printed in the comparison comes from the same cost model as
+    the manual and greedy rows. A plan that referenced a task or vehicle this
+    run does not have would otherwise show up as a plausible-looking number.
+    """
+    if not CUOPT_PLAN_PATH.exists():
+        raise RuntimeError(
+            f"PLAN_SOLVER=cuopt but {CUOPT_PLAN_PATH} is missing. Run:\n"
+            "  ~/.venvs/cuopt/bin/python scripts/plan_cuopt.py"
+        )
+
+    payload = json.loads(CUOPT_PLAN_PATH.read_text(encoding="utf-8"))
+    by_id = {task.task_id: task for task in tasks}
+    known = {vehicle.name for vehicle in vehicles}
+
+    buckets = {vehicle.name: [] for vehicle in vehicles}
+    missing = []
+    for name, task_ids in payload.get("assignment", {}).items():
+        if name not in known:
+            raise RuntimeError(
+                f"cuOpt plan assigns work to unknown vehicle '{name}'; "
+                f"this run has {sorted(known)}"
+            )
+        for task_id in task_ids:
+            if task_id not in by_id:
+                missing.append(task_id)
+                continue
+            buckets[name].append(by_id[task_id])
+
+    if missing:
+        raise RuntimeError(
+            f"cuOpt plan references tasks not in this run: {sorted(missing)}. "
+            "Regenerate it with the same TASK_IDS."
+        )
+    unplanned = sorted(set(by_id) - {t.task_id for g in buckets.values() for t in g})
+    if unplanned:
+        raise RuntimeError(
+            f"cuOpt plan leaves tasks unassigned: {unplanned}"
+        )
 
     print(
-        f"[WAYPOINT GRAPH] hidden: {', '.join(hidden) if hidden else 'nothing found'}",
+        f"[CUOPT] loaded {CUOPT_PLAN_PATH.name}: solved in "
+        f"{payload.get('solve_seconds', 0.0) * 1000:.1f} ms",
         flush=True,
+    )
+    return planner._build_result(
+        graph, vehicles, buckets, "cuopt",
+        float(payload.get("solve_seconds", 0.0)),
     )
 
 
@@ -1577,10 +1861,20 @@ def print_stage_inventory(stage, robot_path, disabled_old_graphs=None, camera_pa
             prim = stage.GetPrimAtPath(path)
             pose = world_pose_of_prim(prim)
 
+            # Size, not just position. The vision standoff has to be measured
+            # from the near edge of the Dolly rather than from its centre: the
+            # dock target sits underneath the middle of it, so standing "3 m
+            # back from the dock" puts the leading edge about 1 m from the lens
+            # and it overflows the frame at any field of view. Reading the
+            # bound here means the controller never has to hardcode a size that
+            # would silently go wrong if the asset changed.
+            bounds = world_bounds_of_prim(prim)
             item = {
                 "index": index,
                 "path": path,
                 **pose,
+                "size": bounds["size"],
+                "half_length_m": max(bounds["size"][0], bounds["size"][1]) / 2.0,
             }
             dolly_data.append(item)
 
@@ -1589,7 +1883,9 @@ def print_stage_inventory(stage, robot_path, disabled_old_graphs=None, camera_pa
                 f"x={pose['x']:.3f}, "
                 f"y={pose['y']:.3f}, "
                 f"z={pose['z']:.3f}, "
-                f"yaw={pose['yaw_deg']:.2f}"
+                f"yaw={pose['yaw_deg']:.2f} | "
+                f"size=({bounds['size'][0]:.2f}, {bounds['size'][1]:.2f}, "
+                f"{bounds['size'][2]:.2f})"
             )
 
     print("\n[WAYPOINT NODES]")
@@ -2287,6 +2583,31 @@ def main():
 
     # ---- Assign tasks to robots (planner layer, solver is swappable).
     graph = load_waypoint_graph(stage, nodes_by_id)
+
+    # Persist the corridor topology, not just the node positions.
+    #
+    # Without it, anything outside this process that wants to reason about
+    # routes has to guess the edges, and a complete graph is the only available
+    # guess. That turns every route into a straight line and makes questions
+    # like "does this task pass a corner" unanswerable - which is exactly what
+    # blocked scripts/classify_tasks.py. The list is small and the planner has
+    # already built it by this point.
+    inventory["inventory"]["edges"] = sorted(
+        [int(a), int(b), round(float(weight), 4)]
+        for a, neighbours in graph.adjacency.items()
+        for b, weight in neighbours
+        if int(a) < int(b)
+    )
+    print(
+        f"[GRAPH] persisted {len(inventory['inventory']['edges'])} edges "
+        "to the inventory",
+        flush=True,
+    )
+
+    # Safe only from here: the node coordinates and the edge list have both been
+    # read out already, so hiding the markers costs the planner nothing.
+    hide_waypoint_graph(stage)
+
     tasks = [
         planner.Task(t["id"], t["dolly"], t["pickup"], t["dropoff"])
         for t in TASKS
@@ -2305,6 +2626,8 @@ def main():
     greedy = planner.plan(graph, tasks, vehicles, solver="greedy")
     if PLAN_SOLVER == "manual":
         chosen = baseline
+    elif PLAN_SOLVER == "cuopt":
+        chosen = load_cuopt_plan(graph, tasks, vehicles)
     else:
         chosen = planner.plan(graph, tasks, vehicles, solver=PLAN_SOLVER)
 
@@ -2325,6 +2648,30 @@ def main():
             f"{100.0 * (1.0 - chosen.total_distance / baseline.total_distance):+.1f}%"
         )
     print("=" * 78 + "\n", flush=True)
+    # Record every candidate, not only the winner.
+    #
+    # The comparison is the evidence that cuOpt did something: on its own,
+    # "makespan 107.2 m" means nothing to a viewer. Storing the rejected plans
+    # alongside it lets the panel node draw the contrast without re-running any
+    # solver, and keeps the numbers identical to the ones printed above rather
+    # than recomputed and possibly drifting.
+    inventory["inventory"]["plan_candidates"] = [
+        {
+            "label": label.strip(),
+            "solver": result.solver,
+            "solve_seconds": result.solve_seconds,
+            "makespan_m": result.makespan,
+            "total_m": result.total_distance,
+            "assignment": {
+                a.vehicle: [task.task_id for task in a.tasks]
+                for a in result.assignments
+            },
+            "cost_m": {a.vehicle: a.cost for a in result.assignments},
+        }
+        for label, result in (
+            ("manual", baseline), ("greedy", greedy), ("selected", chosen)
+        )
+    ]
     inventory["inventory"]["fleet_plan"] = {
         "solver": chosen.solver,
         "solve_seconds": chosen.solve_seconds,
@@ -2517,6 +2864,9 @@ def main():
     while simulation_app.is_running():
         simulation_app.update()
         follower_tick += 1
+
+        if CAMERA_DEBUG and follower_tick % 30 == 0:
+            report_camera_aim(stage, camera_path, runtime)
         for robot in runtime:
             if robot["active"] >= len(robot["missions"]):
                 continue

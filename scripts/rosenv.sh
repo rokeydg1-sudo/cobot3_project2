@@ -26,3 +26,9 @@ esac
 export DISPLAY="${DISPLAY:-:1}"
 
 echo "[rosenv] domain=$ROS_DOMAIN_ID rmw=$RMW_IMPLEMENTATION display=$DISPLAY"
+
+# Where run logs go. Inside the checkout, not /tmp: a log that disappears on
+# reboot cannot be attached to a report, and /tmp paths are not portable.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export RUN_LOG_DIR="${RUN_LOG_DIR:-$REPO_ROOT/logs}"
+mkdir -p "$RUN_LOG_DIR"

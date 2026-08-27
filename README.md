@@ -44,6 +44,16 @@ Stated up front, because they bound what the numbers mean.
   observed making docking worse, so it is limited to 0.05 m. Vision's reliable
   contribution is confirming the dolly is there, not out-measuring odometry.
 - **Single machine.** Multi-PC ROS 2 distribution is not set up here.
+- **Two USD assets carry a dead absolute reference.**
+  `Collected_AF2_FLAT/AF2_FLAT.usd` and `AF2_MULTI_BACKUP.usd` both reference
+  `/home/skywalker/.../simulation/isaac_sim/Collected/AF2.usd`. That file does
+  not exist on the development machine either, and is gitignored, so the
+  reference already fails to resolve and the scene loads and runs regardless -
+  a fresh clone is in exactly the same position. It is recorded here because
+  it is a real absolute path inside a tracked file, and fixing it means
+  rewriting a 126 MB binary USD crate, which is deliberately not done casually:
+  the handover notes require that the original USD is never written and that
+  all corrections happen at runtime.
 
 ---
 

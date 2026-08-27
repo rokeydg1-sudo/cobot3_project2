@@ -93,6 +93,13 @@ class AMRMissionController(Node):
         self.declare_parameter("traffic_topic", "/traffic/claims")
         self.declare_parameter("traffic_timeout_sec", 60.0)
         self.declare_parameter("claim_stale_sec", 2.0)
+        # Vision docking: which mission index (0-based) hands FINAL_DOCK over to
+        # the YOLO/PnP node. -1 disables it. Coordinate docking always remains
+        # the fallback, so a vision dropout cannot strand the robot.
+        self.declare_parameter("vision_dock_mission", -1)
+        self.declare_parameter("vision_cmd_topic", "/dock/cmd_vel")
+        self.declare_parameter("vision_status_topic", "/dock/status")
+        self.declare_parameter("vision_timeout_sec", 1.0)
 
         inventory_path = Path(self.get_parameter("inventory").value)
         with inventory_path.open(encoding="utf-8") as stream:
@@ -141,6 +148,12 @@ class AMRMissionController(Node):
         )
         self.claim_stale_sec = float(self.get_parameter("claim_stale_sec").value)
         self.locked_edges = set(inventory.get("shared_edges", []))
+        self.vision_dock_mission = int(
+            self.get_parameter("vision_dock_mission").value
+        )
+        self.vision_timeout_sec = float(
+            self.get_parameter("vision_timeout_sec").value
+        )
 
         self.publisher = self.create_publisher(Twist, self.topics["cmd_vel"], 10)
         self.subscription = self.create_subscription(
@@ -155,6 +168,20 @@ class AMRMissionController(Node):
         self.dolly_cmd_publisher = self.create_publisher(
             JointState, self.topics["dolly_cmd"], 10
         )
+        if self.vision_dock_mission >= 0:
+            self.vision_cmd_subscription = self.create_subscription(
+                Twist,
+                str(self.get_parameter("vision_cmd_topic").value),
+                self.vision_cmd_callback,
+                10,
+            )
+            self.vision_status_subscription = self.create_subscription(
+                String,
+                str(self.get_parameter("vision_status_topic").value),
+                self.vision_status_callback,
+                10,
+            )
+
         traffic_topic = str(self.get_parameter("traffic_topic").value)
         self.traffic_publisher = self.create_publisher(String, traffic_topic, 10)
         self.traffic_subscription = self.create_subscription(
@@ -198,6 +225,13 @@ class AMRMissionController(Node):
         self.pending_edge = None
         self.wait_started_at = None
         self.last_node = None
+
+        # Vision docking state.
+        self.vision_cmd = None
+        self.vision_cmd_at = 0.0
+        self.vision_complete = False
+        self.vision_used = False
+        self.vision_fallback_logged = False
 
         self.get_logger().info(
             "AMR %s | %d mission(s)" % (amr_name, len(self.missions))
@@ -264,6 +298,33 @@ class AMRMissionController(Node):
             self.lift_position = float(msg.position[msg.name.index("lift_joint")])
         else:
             self.lift_position = float(msg.position[0])
+
+    def vision_cmd_callback(self, msg):
+        self.vision_cmd = msg
+        self.vision_cmd_at = time.monotonic()
+
+    def vision_status_callback(self, msg):
+        if msg.data == "DOCKING_COMPLETE":
+            self.vision_complete = True
+            self.get_logger().info("VISION reports DOCKING_COMPLETE")
+
+    # The docking camera is a 30-degree-FOV lens, so a Dolly only fits in the
+    # frame from roughly 2 m out. FINAL_DOCK alone starts at about 1.5 m, by
+    # which point the Dolly overflows the view. Handing over one leg earlier,
+    # at GO_TO_PRE_DOCK, is where vision can actually see and correct.
+    VISION_STATES = ("GO_TO_PRE_DOCK", "FINAL_DOCK")
+
+    def vision_active(self, now):
+        """True while the vision node is steering this docking approach."""
+        if self.vision_dock_mission < 0:
+            return False
+        if self.mission_index != self.vision_dock_mission:
+            return False
+        if self.state not in self.VISION_STATES or self.vision_complete:
+            return False
+        if self.vision_cmd is None:
+            return False
+        return now - self.vision_cmd_at <= self.vision_timeout_sec
 
     def traffic_callback(self, msg):
         try:
@@ -406,6 +467,10 @@ class AMRMissionController(Node):
             self.missions[index - 1]["goal_node"] if index else None
         )
         self.leg = "APPROACH"
+        self.vision_cmd = None
+        self.vision_complete = False
+        self.vision_used = False
+        self.vision_fallback_logged = False
         self.mission_started_at = time.monotonic()
         self.mission_travelled_at_start = self.travelled_m
         self.waypoints = [int(n) for n in mission["approach_route"]]
@@ -585,6 +650,33 @@ class AMRMissionController(Node):
     # ------------------------------------------------------------- steering
 
     def drive_towards_target(self, now):
+        if self.vision_active(now):
+            if not self.vision_used:
+                self.vision_used = True
+                self.get_logger().info(
+                    "VISION DOCKING engaged for mission %d"
+                    % (self.mission_index + 1)
+                )
+            self.publisher.publish(self.vision_cmd)
+            return
+
+        if (
+            self.state in self.VISION_STATES
+            and self.vision_used
+            and not self.vision_complete
+            and not self.vision_fallback_logged
+        ):
+            self.vision_fallback_logged = True
+            # Expected at the end of the visual approach: once the Dolly fills
+            # the narrow lens there is nothing left to measure, so the vision
+            # node stops publishing and coordinate docking finishes the insert.
+            # The same path also covers a genuine dropout, which is the point -
+            # either way the robot keeps docking.
+            self.get_logger().warning(
+                "VISION handed back to coordinate docking "
+                "(node stopped publishing or timed out)"
+            )
+
         docking = self.state == "FINAL_DOCK"
         tolerance = self.dock_tolerance if docking else self.tolerance
         angular_limit = (

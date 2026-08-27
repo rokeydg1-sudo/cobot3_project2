@@ -61,6 +61,9 @@ ros2_ws/src/navigation/maps/factory/Usd_Explorer/
 ros2_ws/src/navigation/maps/factory/PACKAGE-LICENSES/
 ros2_ws/src/navigation/maps/factory/PACKAGE-INFO.yaml
 
-# Vision / solver virtualenvs (large, machine-specific)
-/.venv_vision/
+# Vision / solver virtualenvs (large, machine-specific).
+# No trailing slash: on this machine .venv_vision is a symlink into a sibling
+# checkout, and a directory-only pattern would leave the link untracked-but-
+# visible in every `git status`.
+/.venv_vision
 /.venvs/

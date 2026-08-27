@@ -150,6 +150,21 @@ CAMERA_FRAME = "front_camera"
 CAMERA_TOPIC = "/vision/front_camera/image_raw"
 CAMERA_NAME = "transporter_camera_first_person"
 
+# Docking camera placement, measured in the robot's own frame: metres ahead of
+# the chassis origin, metres above the floor, and how far the optical axis is
+# tilted down from horizontal.
+#
+# The authored `transporter_camera_first_person` cannot be reused as-is. Copying
+# its pose puts the docking view up in the roof trusses - a frame captured 0.5 m
+# from a Dolly showed sky and a storage rack, no Dolly at all. The synthetic
+# training set placed the Dolly centred on the optical axis at 2.0-3.5 m, so
+# inference only matches training if the camera looks straight ahead and roughly
+# level. Only the pose is rebuilt here; the optics below are still copied from
+# the authored camera, so the calibrated intrinsics stay valid.
+CAMERA_FORWARD_M = float(os.environ.get("CAMERA_FORWARD_M", "0.55"))
+CAMERA_HEIGHT_M = float(os.environ.get("CAMERA_HEIGHT_M", "0.45"))
+CAMERA_PITCH_DEG = float(os.environ.get("CAMERA_PITCH_DEG", "4.0"))
+
 CAMERA_WIDTH = int(os.environ.get("CAMERA_WIDTH", "1280"))
 CAMERA_HEIGHT = int(os.environ.get("CAMERA_HEIGHT", "720"))
 
@@ -294,12 +309,46 @@ def create_docking_camera(stage, robot_path, source_camera_path):
         raise RuntimeError("Source camera or moving chassis is missing")
 
     source_camera = UsdGeom.Camera(source)
-    source_mount = source.GetParent()
     cache = UsdGeom.XformCache(Usd.TimeCode.Default())
     chassis_world = cache.GetLocalToWorldTransform(chassis)
-    mount_world = cache.GetLocalToWorldTransform(source_mount)
-    mount_relative = chassis_world.GetInverse() * mount_world
-    camera_relative = UsdGeom.Xformable(source).GetLocalTransformation()
+
+    # Build the view in world space first, then convert into the chassis frame.
+    # Doing it that way avoids having to guess which chassis-local axis points
+    # forward: the robot prim's yaw is already the fleet-wide definition of
+    # forward, since the docking targets are derived from it.
+    robot_pose = world_pose_of_prim(stage.GetPrimAtPath(robot_path))
+    yaw = math.radians(robot_pose["yaw_deg"])
+    forward = Gf.Vec3d(math.cos(yaw), math.sin(yaw), 0.0)
+    up = Gf.Vec3d(0.0, 0.0, 1.0)
+
+    chassis_origin = chassis_world.ExtractTranslation()
+    eye = Gf.Vec3d(
+        chassis_origin[0] + forward[0] * CAMERA_FORWARD_M,
+        chassis_origin[1] + forward[1] * CAMERA_FORWARD_M,
+        CAMERA_HEIGHT_M,
+    )
+    tilt = math.radians(CAMERA_PITCH_DEG)
+    view = Gf.Vec3d(
+        forward[0] * math.cos(tilt),
+        forward[1] * math.cos(tilt),
+        -math.sin(tilt),
+    )
+    target = eye + view * 4.0
+
+    # SetLookAt returns a world->camera view matrix; USD wants camera->parent.
+    camera_world = Gf.Matrix4d().SetLookAt(eye, target, up).GetInverse()
+    # Gf matrices are row-vector, so world = local * parent and therefore
+    # local = world * parent^-1. Composing the other way around silently
+    # produces a rotated camera.
+    mount_relative = Gf.Matrix4d(1.0)
+    camera_relative = camera_world * chassis_world.GetInverse()
+
+    print(
+        f"  camera_pose forward={CAMERA_FORWARD_M:.2f} m "
+        f"height={CAMERA_HEIGHT_M:.2f} m pitch={CAMERA_PITCH_DEG:.1f} deg "
+        f"robot_yaw={robot_pose['yaw_deg']:.1f} deg eye=({eye[0]:.3f}, "
+        f"{eye[1]:.3f}, {eye[2]:.3f})"
+    )
 
     mount_path = f"{chassis.GetPath()}/docking_camera_mount"
     camera_path = f"{mount_path}/docking_camera"
@@ -463,6 +512,35 @@ MANUAL_ASSIGNMENT = {
     "amr2": ["T2", "T5"],
     "amr3": ["T3", "T6"],
 }
+
+# The vision-docking demo runs a two-robot fleet so both AMRs stay on screen and
+# each one docks from a camera the operator can actually watch. FLEET/TASK_IDS
+# restore the full three-robot, six-task run without touching the code.
+FLEET = [
+    name.strip()
+    for name in os.environ.get("FLEET", "amr1,amr2").split(",")
+    if name.strip()
+]
+TASK_IDS = [
+    task_id.strip()
+    for task_id in os.environ.get("TASK_IDS", "T1,T2,T3,T4").split(",")
+    if task_id.strip()
+]
+
+AMRS = [spec for spec in AMRS if spec["name"] in FLEET]
+TASKS = [task for task in TASKS if task["id"] in TASK_IDS]
+if not AMRS or not TASKS:
+    raise RuntimeError(f"FLEET={FLEET} / TASK_IDS={TASK_IDS} selected nothing")
+# Keep the round-robin baseline consistent with whatever subset is active,
+# otherwise the planner comparison would score against phantom missions.
+MANUAL_ASSIGNMENT = {spec["name"]: [] for spec in AMRS}
+for _index, _task in enumerate(TASKS):
+    MANUAL_ASSIGNMENT[AMRS[_index % len(AMRS)]["name"]].append(_task["id"])
+print(
+    f"[FLEET] amrs={[spec['name'] for spec in AMRS]} "
+    f"tasks={[task['id'] for task in TASKS]} baseline={MANUAL_ASSIGNMENT}",
+    flush=True,
+)
 
 AMR_SPAWN_Z = float(os.environ.get("AMR_SPAWN_Z", "0.35"))
 # Multiplier applied to an edge another mission already claimed.
@@ -1285,6 +1363,37 @@ def find_waypoint_nodes(stage):
         return int(tail) if tail.isdigit() else 999999
 
     return sorted(nodes, key=node_sort_key)
+
+
+def hide_waypoint_graph(stage):
+    """Hide the authored waypoint markers so they stop blocking the camera.
+
+    The node markers sit at z = 0.15 m, which is squarely inside the docking
+    camera's line of sight - the camera is 0.45 m up and tilted 4 degrees down,
+    so a marker a couple of metres ahead lands right where the Dolly should be.
+    Node 10 in particular sits directly between amr1 and its pickup Dolly, and
+    the detector never saw the Dolly because a marker was in front of it.
+
+    Only visibility changes. Positions and edges have already been read into the
+    inventory and the planner graph by this point, so nothing downstream needs
+    the geometry, and the original USD is never written.
+    """
+    if SHOW_WAYPOINT_GRAPH:
+        print("[WAYPOINT GRAPH] left visible (SHOW_WAYPOINT_GRAPH=1)", flush=True)
+        return
+
+    hidden = []
+    for path in ("/World/WaypointGraph/Nodes", "/World/WaypointGraph/Edges"):
+        prim = stage.GetPrimAtPath(path)
+        if not prim.IsValid():
+            continue
+        UsdGeom.Imageable(prim).MakeInvisible()
+        hidden.append(f"{path.rsplit('/', 1)[-1]}({len(prim.GetChildren())})")
+
+    print(
+        f"[WAYPOINT GRAPH] hidden: {', '.join(hidden) if hidden else 'nothing found'}",
+        flush=True,
+    )
 
 
 def load_waypoint_graph(stage, nodes_by_id):

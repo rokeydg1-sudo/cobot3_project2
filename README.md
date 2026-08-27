@@ -44,6 +44,14 @@ Stated up front, because they bound what the numbers mean.
   observed making docking worse, so it is limited to 0.05 m. Vision's reliable
   contribution is confirming the dolly is there, not out-measuring odometry.
 - **Single machine.** Multi-PC ROS 2 distribution is not set up here.
+- **T4 is excluded from the default task set.** Its pickup at Node_11 is the
+  only approach where the snapshot never produced a usable measurement: two
+  runs reported "no blob near 350 px wide" and "no blue region" there, while
+  every other pickup was recognised on 5 of 5 frames. The cause is not yet
+  understood - the deck width prediction, the lighting at that bay, and the
+  approach heading are all candidates - so the task is left out rather than
+  demonstrated failing. Re-enable with
+  `TASK_IDS=T1,T2,T3,T4,T5,T6,T7` and regenerate the plan.
 - **Two USD assets carry a dead absolute reference.**
   `Collected_AF2_FLAT/AF2_FLAT.usd` and `AF2_MULTI_BACKUP.usd` both reference
   `/home/skywalker/.../simulation/isaac_sim/Collected/AF2.usd`. That file does
@@ -92,7 +100,7 @@ All are optional; defaults are in `simulation/isaac_sim/standalone_factory_bridg
 | Variable | Default | Meaning |
 |---|---|---|
 | `FLEET` | `amr1,amr2` | Which robots to spawn |
-| `TASK_IDS` | `T1..T7` | Which transports to run |
+| `TASK_IDS` | `T1,T2,T3,T5,T6,T7` | Which transports to run. T4 excluded; see below |
 | `PLAN_SOLVER` | `auto` | `auto`, `manual`, `greedy`, `exact`, `cuopt` |
 | `HEADLESS` | `0` | `1` renders without a window |
 | `CAMERA_WIDTH` / `CAMERA_HEIGHT` | `1280` / `720` | Docking camera resolution |
@@ -130,7 +138,7 @@ bash scripts/cleanup.sh
 
 # 2. Start the simulation bridge. Wait for "BRIDGE RUNNING" (about 40 s).
 HEADLESS=0 CAMERA_WIDTH=640 CAMERA_HEIGHT=360 \
-  FLEET=amr1,amr2,amr3 TASK_IDS=T1,T2,T3,T4,T5,T6,T7 PLAN_SOLVER=cuopt \
+  FLEET=amr1,amr2,amr3 TASK_IDS=T1,T2,T3,T5,T6,T7 PLAN_SOLVER=cuopt \
   bash scripts/run_bridge.sh
 
 # 3. Vision node, plan panel, and viewers (each in its own terminal)

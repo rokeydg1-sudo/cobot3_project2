@@ -52,28 +52,34 @@ Doosan Robotics ROKEY BOOT CAMP 9기 협동 프로젝트(4인 팀, 2026.08.14 ~ 
 ### 3-1. 최종 시연 구성
 
 ```mermaid
-flowchart LR
-    T["Task Set<br/>운송 작업 정의"] --> P["Fleet Planner<br/>cuOpt 작업 배분·순서"]
-    P -->|AMR별 작업 목록| M["AMR Mission Controller ×3<br/>상태 기계 · 간선 예약"]
-    M -->|/cmd_vel · /lift_cmd · /dolly_cmd| B["ROS 2 Bridge<br/>OmniGraph"]
+flowchart TB
+    T["Task Set<br/>운송 작업 정의"] --> P["Fleet Planner<br/>cuOpt 작업 배분 · 순서"]
+    P -->|AMR별 작업 목록| M["AMR Mission Controller ×3<br/>상태 기계 · 통로 구간 예약"]
+    M -->|속도 · 리프트 명령| B["ROS 2 Bridge (OmniGraph)"]
+    B -->|위치 · 리프트 상태| M
     B <--> S["Isaac Sim<br/>공장 · AMR 3대 · 수레"]
-    B -->|/odom · /tf · /lift_joint_state| M
-    M <-->|/traffic/claims| M
-    M -->|/dock/snapshot_request| V["Vision Docking<br/>HSV 스냅샷 인식"]
+    M -->|스냅샷 요청| V["Vision Docking<br/>HSV 스냅샷 인식"]
     B -->|카메라 영상| V
-    V -->|/dock/snapshot_result · /dock/cmd_vel| M
+    V -->|정렬 보정| M
     P --> R["Visualization<br/>rqt · 계획 비교 · 공장 지도"]
     B --> R
 ```
 
+| 연결 | ROS 2 토픽 |
+|---|---|
+| 미션 컨트롤러 → 브리지 | `/cmd_vel`(주행), `/lift_cmd` · `/dolly_cmd`(리프트 · 수레) |
+| 브리지 → 미션 컨트롤러 | `/odom` · `/tf`(위치), `/lift_joint_state` |
+| 미션 컨트롤러 ↔ 미션 컨트롤러 | `/traffic/claims`(통로 구간 예약 공유) |
+| 미션 컨트롤러 ↔ 비전 도킹 | `/dock/snapshot_request` → `/dock/snapshot_result` · `/dock/cmd_vel` |
+
 | 모듈 | 역할 | 주요 파일 |
 |---|---|---|
-| Task / Inventory | 운송 작업(픽업 · 배송 위치)과 수레 위치 정의 | `simulation/isaac_sim/standalone_factory_bridge.py` |
-| Fleet Planner | 공장 지도 그래프 위 최단경로 비용으로 AMR별 작업 배분 · 순서 계산. cuOpt 풀이와 비교용 풀이(exact · greedy · manual) | `scripts/plan_cuopt.py`, `simulation/isaac_sim/mission_planner.py` |
-| AMR Mission Controller | AMR마다 하나씩 실행. 배분된 작업을 상태 기계로 수행하고, 지나갈 통로 구간을 예약해 다른 AMR과 공유 | `ros2_ws/src/amr_control/amr_control/amr_mission_controller.py` |
-| ROS 2 Bridge ↔ Isaac Sim | 공장 씬 · AMR · 수레 생성. 속도 명령을 시뮬레이터 AMR에 적용하고 위치 · 시간 · 카메라 영상을 ROS 2로 발행 | `simulation/isaac_sim/standalone_factory_bridge.py` |
-| Vision Docking | 도킹 직전 카메라 스냅샷 한 장으로 수레 상판을 HSV로 인식해 정렬 보정 | `simulation/isaac_sim/vision_docking/runtime/` |
-| Visualization | 배분 계획 비교 막대, 공장 지도와 실시간 위치, AMR 카메라 화면(rqt) | `scripts/planner_panel.py`, `scripts/planner_map.py` |
+| Task / Inventory | 운송 작업(픽업 · 배송 위치)과 수레 위치 정의 | [standalone_factory_bridge.py](simulation/isaac_sim/standalone_factory_bridge.py) |
+| Fleet Planner | 공장 지도 그래프의 최단경로 비용으로 AMR별 작업 배분 · 순서 계산. cuOpt 풀이와 비교용 풀이(exact · greedy · manual) | [plan_cuopt.py](scripts/plan_cuopt.py), [mission_planner.py](simulation/isaac_sim/mission_planner.py) |
+| AMR Mission Controller | AMR마다 하나씩 실행. 배분된 작업을 상태 기계로 수행하고, 지나갈 통로 구간을 예약해 다른 AMR과 공유 | [amr_mission_controller.py](ros2_ws/src/amr_control/amr_control/amr_mission_controller.py) |
+| ROS 2 Bridge ↔ Isaac Sim | 공장 씬 · AMR · 수레 생성. 속도 명령을 시뮬레이터 AMR에 적용하고 위치 · 시간 · 카메라 영상을 ROS 2로 발행 | [standalone_factory_bridge.py](simulation/isaac_sim/standalone_factory_bridge.py) |
+| Vision Docking | 도킹 직전 카메라 스냅샷 한 장으로 수레 상판을 HSV로 인식해 정렬 보정 | [vision_docking/runtime/](simulation/isaac_sim/vision_docking/runtime/) |
+| Visualization | 배분 계획 비교 막대, 공장 지도와 실시간 위치, AMR 카메라 화면(rqt) | [planner_panel.py](scripts/planner_panel.py), [planner_map.py](scripts/planner_map.py) |
 
 ### 3-2. AMR 한 대의 동작 순서
 

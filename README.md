@@ -41,9 +41,9 @@ Doosan Robotics ROKEY BOOT CAMP 9기 협동 프로젝트(4인 팀, 2026.08.14 ~ 
 
 ## 2. 시연 영상
 
-[![시연 영상 보기](docs/readme_assets/demo_poster.png)](docs/readme_assets/demo_clip.mp4)
+[![시연 영상 보기](docs/readme_assets/demo_poster.png)](https://cdn.jsdelivr.net/gh/sskywalker1209-prog/cobot3_project2@9c1508a3a5a4c70ec2b66e9281ea2e230d865e84/docs/readme_assets/demo_clip.mp4)
 
-- 위 이미지를 누르면 시연 영상(`docs/readme_assets/demo_clip.mp4`, 약 56초, 무음)이 열립니다.
+- 위 이미지를 누르면 브라우저에서 시연 영상(약 56초, 무음)이 재생됩니다. 영상 파일은 저장소의 [docs/readme_assets/demo_clip.mp4](docs/readme_assets/demo_clip.mp4)에도 있습니다(GitHub 파일 화면에서는 재생되지 않고 내려받기만 됩니다).
 - 순서: 경로 계획 화면 → AMR 경로 주행 → 카메라로 수레 인식 → 도킹 · 운반 → 배분 계획 비교 → 3대 동시 운행
 - 팀 제출 시연 영상에서 앞부분의 참고 사진(실제 공장 사진)을 뺀 구간입니다.
 

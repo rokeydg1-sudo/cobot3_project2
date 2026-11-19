@@ -39,6 +39,14 @@ Doosan Robotics ROKEY BOOT CAMP 9기 협동 프로젝트(4인 팀, 2026.08.14 ~ 
 **목표와 결과.** 작업 배분부터 AMR 이동 · 도킹 · 운반 · 위치 피드백까지 한 흐름으로 이어지는 시뮬레이션을 만드는 것이 목표였습니다.
 최종 시연에서는 AMR 3대가 배분받은 운송 작업에 따라 수레에 도킹해 옮기는 과정을 한 PC에서 실행했습니다.
 
+**저장소 구성.** 이 프로젝트는 단계별로 저장소를 나눠 관리했습니다. 이 저장소가 최종 버전(v2)입니다.
+
+| 저장소 | 용도 |
+|---|---|
+| [cobot3_project](https://github.com/rokeydg1-sudo/cobot3_project) (v1) | 통합 단계(08-21 ~ 08-24): 작업 요청형 FMS · cuOpt · Nav2 통합 |
+| **cobot3_project2 (v2, 이 저장소)** | 최종 구성(08-25 ~ 08-30): cuOpt 배분 · 미션 컨트롤러 · 스냅샷 비전 도킹. v1 통합 단계 커밋(`c831af5`)에서 이어 시작해 커밋 이력에 v1 시기 커밋이 함께 있습니다 |
+| [cobot3_ws](https://github.com/rokeydg1-sudo/cobot3_ws) | 수업 기록용(08-14 ~ 08-20): Isaac Sim 기초 실습 · M0609 IK · Nova Carter 순찰 |
+
 ## 2. 시연 영상
 
 [![시연 영상 보기](docs/readme_assets/demo_poster.png)](https://cdn.jsdelivr.net/gh/sskywalker1209-prog/cobot3_project2@9c1508a3a5a4c70ec2b66e9281ea2e230d865e84/docs/readme_assets/demo_clip.mp4)
